@@ -63,12 +63,8 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       const hh = membership.households as unknown as Household;
       setHousehold(hh);
 
-      const { data: allMembers } = await supabase
-        .from('household_members')
-        .select('id, household_id, user_id, display_name, finance_role, created_at')
-        .eq('household_id', hh.id);
-
-      setMembers(allMembers ?? []);
+      const { data: allMembers } = await supabase.rpc('get_household_members', { p_household_id: hh.id });
+      setMembers((allMembers as HouseholdMember[]) ?? []);
     } else if (ownedHouseholds && ownedHouseholds.length > 0) {
       const hh = ownedHouseholds[0];
       setHousehold(hh);
@@ -84,11 +80,8 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
           .from('household_members')
           .insert({ household_id: hh.id, user_id: user.id, finance_role: 'full_access', display_name: user.email?.split('@')[0] ?? null });
       }
-      const { data: allMembers } = await supabase
-        .from('household_members')
-        .select('id, household_id, user_id, display_name, finance_role, created_at')
-        .eq('household_id', hh.id);
-      setMembers(allMembers ?? []);
+      const { data: allMembers } = await supabase.rpc('get_household_members', { p_household_id: hh.id });
+      setMembers((allMembers as HouseholdMember[]) ?? []);
     } else {
       const { data: newHH, error: hhError } = await supabase
         .from('households')
@@ -108,11 +101,8 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
           .insert({ household_id: newHH.id, user_id: user.id, finance_role: 'full_access', display_name: user.email?.split('@')[0] ?? null });
 
         setHousehold(newHH);
-        const { data: allMembers } = await supabase
-          .from('household_members')
-          .select('id, household_id, user_id, display_name, finance_role, created_at')
-          .eq('household_id', newHH.id);
-        setMembers(allMembers ?? []);
+        const { data: allMembers } = await supabase.rpc('get_household_members', { p_household_id: newHH.id });
+        setMembers((allMembers as HouseholdMember[]) ?? []);
       }
     }
 
