@@ -93,6 +93,60 @@ const DEFAULT_HOLDINGS: Omit<Investment, 'id' | 'user_id' | 'household_id' | 'la
   { tier: 'asymmetric_upside', symbol: 'XRP', current_value_cad: 0, target_pct: 1 },
 ];
 
+// ─── InlineEdit component ────────────────────────────────────────────────────
+
+function InlineEdit({
+  value,
+  onSave,
+  className,
+  disabled,
+}: {
+  value: string;
+  onSave: (v: string) => void;
+  className?: string;
+  disabled?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  if (!editing || disabled) {
+    return (
+      <span
+        onClick={() => !disabled && setEditing(true)}
+        className={cn(
+          'cursor-pointer hover:text-blue-400',
+          disabled && 'cursor-default hover:text-inherit',
+          className
+        )}
+      >
+        {value}
+      </span>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft.trim() && draft !== value) onSave(draft.trim());
+        setEditing(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          if (draft.trim() && draft !== value) onSave(draft.trim());
+          setEditing(false);
+        }
+        if (e.key === 'Escape') {
+          setDraft(value);
+          setEditing(false);
+        }
+      }}
+      className="px-2 py-1 bg-zinc-800 border border-blue-500 rounded text-sm text-white focus:outline-none"
+    />
+  );
+}
+
 // ─── Input helpers ───────────────────────────────────────────────────────────
 
 function InputField({
@@ -103,6 +157,7 @@ function InputField({
   step,
   placeholder,
   className,
+  disabled,
 }: {
   label: string;
   value: string | number;
@@ -111,6 +166,7 @@ function InputField({
   step?: string;
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <div className={cn('flex flex-col gap-1', className)}>
@@ -121,7 +177,8 @@ function InputField({
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+        disabled={disabled}
+        className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       />
     </div>
   );
@@ -159,35 +216,6 @@ function SaveButton({ saving, onClick }: { saving: boolean; onClick: () => void 
       {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
       {saving ? 'Saving...' : 'Save'}
     </button>
-  );
-}
-
-function InlineEdit({ value, onSave, className, disabled }: { value: string; onSave: (v: string) => void; className?: string; disabled?: boolean }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => { setDraft(value); }, [value]);
-
-  if (disabled || !editing) {
-    return (
-      <span
-        onClick={() => !disabled && setEditing(true)}
-        className={cn(disabled ? '' : 'cursor-pointer hover:text-blue-400', className)}
-        title={disabled ? undefined : 'Click to edit'}
-      >
-        {value}
-      </span>
-    );
-  }
-  return (
-    <input
-      autoFocus
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => { if (draft.trim() && draft !== value) onSave(draft.trim()); setEditing(false); }}
-      onKeyDown={(e) => { if (e.key === 'Enter') { if (draft.trim() && draft !== value) onSave(draft.trim()); setEditing(false); } if (e.key === 'Escape') { setDraft(value); setEditing(false); } }}
-      className="px-2 py-1 bg-zinc-800 border border-blue-500 rounded text-sm text-white focus:outline-none w-full"
-    />
   );
 }
 
@@ -234,9 +262,18 @@ export default function FinancesPage() {
     );
   }
 
-  if (!user || !householdId) {
+  if (!user) {
     return (
-      <div className="text-center text-zinc-400 py-20">Setting up household...</div>
+      <div className="text-center text-zinc-400 py-20">Please sign in to view finances.</div>
+    );
+  }
+
+  if (!householdId) {
+    return (
+      <div className="flex items-center justify-center h-64 gap-3">
+        <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />
+        <span className="text-zinc-400">Setting up household...</span>
+      </div>
     );
   }
 
@@ -264,18 +301,36 @@ export default function FinancesPage() {
       </div>
 
       {/* Tab panels */}
-      {activeTab === 'Budget' && <BudgetTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
-      {activeTab === 'Cash Flow' && <CashFlowTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
-      {activeTab === 'Reimbursements' && <ReimbursementsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
-      {activeTab === 'Net Worth' && <NetWorthTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
-      {activeTab === 'Investments' && <InvestmentsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
+      {activeTab === 'Budget' && (
+        <BudgetTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
+      )}
+      {activeTab === 'Cash Flow' && (
+        <CashFlowTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
+      )}
+      {activeTab === 'Reimbursements' && (
+        <ReimbursementsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
+      )}
+      {activeTab === 'Net Worth' && (
+        <NetWorthTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
+      )}
+      {activeTab === 'Investments' && (
+        <InvestmentsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
+      )}
     </div>
   );
 }
 
 // ─── BUDGET TAB ──────────────────────────────────────────────────────────────
 
-function BudgetTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
+function BudgetTab({
+  userId,
+  householdId,
+  canEdit,
+}: {
+  userId: string;
+  householdId: string;
+  canEdit: boolean;
+}) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -298,7 +353,7 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
       .eq('household_id', householdId)
       .order('sort_order');
     if (data) setCategories(data);
-  }, [userId]);
+  }, [householdId]);
 
   const loadEntriesForDate = useCallback(
     async (d: string) => {
@@ -319,7 +374,7 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
         setNotes(nts);
       }
     },
-    [userId]
+    [householdId]
   );
 
   const loadWeekEntries = useCallback(async () => {
@@ -332,7 +387,7 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
       .gte('date', weekStart)
       .lte('date', weekEnd);
     if (data) setWeekEntries(data);
-  }, [userId]);
+  }, [householdId]);
 
   const loadMonthEntries = useCallback(async () => {
     const monthStart = getMonthStart(getToday());
@@ -344,7 +399,7 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
       .gte('date', monthStart)
       .lte('date', monthEnd);
     if (data) setMonthEntries(data);
-  }, [userId]);
+  }, [householdId]);
 
   const loadTrendData = useCallback(async () => {
     const startDate = getDaysAgo(30);
@@ -355,7 +410,6 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
       .gte('date', startDate)
       .lte('date', getToday());
     if (data) {
-      // Group by date and sum
       const byDate: Record<string, number> = {};
       data.forEach((e) => {
         byDate[e.date] = (byDate[e.date] || 0) + e.amount;
@@ -365,7 +419,7 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
         .map(([d, total]) => ({ date: d, total }));
       setTrendData(trend);
     }
-  }, [userId]);
+  }, [householdId]);
 
   const loadAll = useCallback(async () => {
     await loadCategories();
@@ -391,7 +445,8 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
       if (amount > 0 || note) {
         await supabase.from('budget_daily').upsert(
           {
-            user_id: userId, household_id: householdId,
+            user_id: userId,
+            household_id: householdId,
             date,
             category_id: cat.id,
             amount,
@@ -408,7 +463,8 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
   const addCategory = async () => {
     if (!newCatName.trim() || newCatAmount <= 0) return;
     await supabase.from('budget_categories').insert({
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
       name: newCatName.trim(),
       monthly_amount: newCatAmount,
       sort_order: categories.length,
@@ -426,7 +482,8 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
 
   const seedDefaults = async () => {
     const rows = DEFAULT_BUDGET_CATEGORIES.map((c, i) => ({
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
       name: c.name,
       monthly_amount: c.monthly_amount,
       sort_order: i,
@@ -435,7 +492,19 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
     await loadAll();
   };
 
-  // Compute per-category sums for week and month
+  const renameCategory = async (catId: string, newName: string) => {
+    await supabase.from('budget_categories').update({ name: newName }).eq('id', catId);
+    await loadCategories();
+  };
+
+  const updateCategoryAmount = async (catId: string, newAmount: number) => {
+    await supabase
+      .from('budget_categories')
+      .update({ monthly_amount: newAmount })
+      .eq('id', catId);
+    await loadCategories();
+  };
+
   const weekSumByCat = (catId: string) =>
     weekEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
   const monthSumByCat = (catId: string) =>
@@ -466,13 +535,15 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
           {categories.length === 0 && (
             <div className="text-center py-6">
               <p className="text-zinc-400 mb-4">No categories yet.</p>
-              <button
-                onClick={seedDefaults}
-                className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Seed Defaults
-              </button>
+              {canEdit && (
+                <button
+                  onClick={seedDefaults}
+                  className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Seed Defaults
+                </button>
+              )}
             </div>
           )}
 
@@ -483,46 +554,47 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
                   key={cat.id}
                   className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
                 >
-                  <div className="flex items-center gap-3">
+                  <div>
                     <InlineEdit
                       value={cat.name}
-                      disabled={!canEdit}
-                      onSave={async (v) => { await supabase.from('budget_categories').update({ name: v }).eq('id', cat.id); loadCategories(); }}
+                      onSave={(v) => renameCategory(cat.id, v)}
                       className="text-sm font-medium text-white"
-                    />
-                    <InlineEdit
-                      value={String(cat.monthly_amount)}
                       disabled={!canEdit}
-                      onSave={async (v) => { await supabase.from('budget_categories').update({ monthly_amount: Number(v) }).eq('id', cat.id); loadCategories(); }}
-                      className="text-xs text-zinc-400"
                     />
-                    <span className="text-xs text-zinc-500">
+                    <span className="text-xs text-zinc-400 ml-3">
+                      {formatCurrency(cat.monthly_amount)}/mo
+                    </span>
+                    <span className="text-xs text-zinc-500 ml-2">
                       ({formatCurrency(Math.round(cat.monthly_amount / 4.333))}/wk)
                     </span>
                   </div>
-                  {deleteConfirm === cat.id ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-red-400">Delete?</span>
-                      <button
-                        onClick={() => deleteCategory(cat.id)}
-                        className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
-                      >
-                        <Check className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirm(null)}
-                        className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeleteConfirm(cat.id)}
-                      className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                  {canEdit && (
+                    <>
+                      {deleteConfirm === cat.id ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-red-400">Delete?</span>
+                          <button
+                            onClick={() => deleteCategory(cat.id)}
+                            className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm(null)}
+                            className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setDeleteConfirm(cat.id)}
+                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               ))}
@@ -530,31 +602,33 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
           )}
 
           {/* Add new category */}
-          <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
-            <InputField
-              label="Category Name"
-              type="text"
-              value={newCatName}
-              onChange={setNewCatName}
-              placeholder="e.g. Groceries"
-              className="flex-1"
-            />
-            <InputField
-              label="Monthly Amount ($)"
-              value={newCatAmount || ''}
-              step="1"
-              onChange={(v) => setNewCatAmount(parseFloat(v) || 0)}
-              className="w-40"
-            />
-            <button
-              onClick={addCategory}
-              disabled={!newCatName.trim() || newCatAmount <= 0}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
-            >
-              <Plus className="w-4 h-4" />
-              Add
-            </button>
-          </div>
+          {canEdit && (
+            <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
+              <InputField
+                label="Category Name"
+                type="text"
+                value={newCatName}
+                onChange={setNewCatName}
+                placeholder="e.g. Groceries"
+                className="flex-1"
+              />
+              <InputField
+                label="Monthly Amount ($)"
+                value={newCatAmount || ''}
+                step="1"
+                onChange={(v) => setNewCatAmount(parseFloat(v) || 0)}
+                className="w-40"
+              />
+              <button
+                onClick={addCategory}
+                disabled={!newCatName.trim() || newCatAmount <= 0}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+              >
+                <Plus className="w-4 h-4" />
+                Add
+              </button>
+            </div>
+          )}
         </Card>
       )}
 
@@ -571,6 +645,7 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
               value={date}
               onChange={setDate}
               className="w-48"
+              disabled={!canEdit}
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -582,24 +657,28 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
                   step="0.01"
                   value={amounts[cat.id] || ''}
                   placeholder="0"
+                  disabled={!canEdit}
                   onChange={(e) =>
                     setAmounts((a) => ({ ...a, [cat.id]: parseFloat(e.target.value) || 0 }))
                   }
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <input
                   type="text"
                   value={notes[cat.id] || ''}
                   placeholder="Notes (optional)"
+                  disabled={!canEdit}
                   onChange={(e) => setNotes((n) => ({ ...n, [cat.id]: e.target.value }))}
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-blue-600 transition-colors"
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
             ))}
           </div>
-          <div className="mt-4 flex justify-end">
-            <SaveButton saving={saving} onClick={handleSave} />
-          </div>
+          {canEdit && (
+            <div className="mt-4 flex justify-end">
+              <SaveButton saving={saving} onClick={handleSave} />
+            </div>
+          )}
         </Card>
       )}
 
@@ -707,7 +786,10 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
                     />
                   </div>
                   <div
-                    className={cn('text-xs mt-1', over ? 'text-red-400' : 'text-emerald-400')}
+                    className={cn(
+                      'text-xs mt-1',
+                      over ? 'text-red-400' : 'text-emerald-400'
+                    )}
                   >
                     {pct}% of monthly budget
                   </div>
@@ -762,7 +844,15 @@ function BudgetTab({ userId, householdId, canEdit }: { userId: string; household
 
 // ─── CASH FLOW TAB ───────────────────────────────────────────────────────────
 
-function CashFlowTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
+function CashFlowTab({
+  userId,
+  householdId,
+  canEdit,
+}: {
+  userId: string;
+  householdId: string;
+  canEdit: boolean;
+}) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -771,7 +861,9 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
   const [balances, setBalances] = useState<Record<string, number>>({});
   const [todayBalances, setTodayBalances] = useState<Record<string, number>>({});
   const [yesterdayBalances, setYesterdayBalances] = useState<Record<string, number>>({});
-  const [trendData, setTrendData] = useState<(Record<string, unknown> & { date: string })[]>([]);
+  const [trendData, setTrendData] = useState<(Record<string, unknown> & { date: string })[]>(
+    []
+  );
   const [newAccountName, setNewAccountName] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
@@ -782,7 +874,7 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
       .eq('household_id', householdId)
       .order('sort_order');
     if (data) setAccounts(data);
-  }, [userId]);
+  }, [householdId]);
 
   const loadBalancesForDate = useCallback(
     async (d: string) => {
@@ -800,7 +892,7 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
       }
       return {};
     },
-    [userId]
+    [householdId]
   );
 
   const loadDashboardData = useCallback(async () => {
@@ -821,7 +913,6 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
       .gte('date', ninetyDaysAgo)
       .order('date');
     if (data) {
-      // Group by date
       const byDate: Record<string, Record<string, number>> = {};
       data.forEach((b: AccountBalance & { accounts: { name: string } | null }) => {
         if (!byDate[b.date]) byDate[b.date] = {};
@@ -836,7 +927,7 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
         });
       setTrendData(trend);
     }
-  }, [userId]);
+  }, [householdId]);
 
   const loadFormBalances = useCallback(async () => {
     const bals = await loadBalancesForDate(date);
@@ -865,7 +956,8 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
       if (balance !== undefined) {
         await supabase.from('account_balances').upsert(
           {
-            user_id: userId, household_id: householdId,
+            user_id: userId,
+            household_id: householdId,
             account_id: acc.id,
             date,
             balance,
@@ -881,7 +973,8 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
   const addAccount = async () => {
     if (!newAccountName.trim()) return;
     await supabase.from('accounts').insert({
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
       name: newAccountName.trim(),
       sort_order: accounts.length,
     });
@@ -897,7 +990,8 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
 
   const seedDefaults = async () => {
     const rows = DEFAULT_ACCOUNTS.map((name, i) => ({
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
       name,
       sort_order: i,
     }));
@@ -905,11 +999,24 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
     await loadAll();
   };
 
+  const renameAccount = async (accId: string, newName: string) => {
+    await supabase.from('accounts').update({ name: newName }).eq('id', accId);
+    await loadAccounts();
+  };
+
   const totalToday = accounts.reduce((s, a) => s + (todayBalances[a.id] || 0), 0);
   const accountNames = accounts.map((a) => a.name);
 
-  // Colors for account lines
-  const lineColors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#f97316', '#ec4899'];
+  const lineColors = [
+    '#3b82f6',
+    '#10b981',
+    '#f59e0b',
+    '#8b5cf6',
+    '#ef4444',
+    '#06b6d4',
+    '#f97316',
+    '#ec4899',
+  ];
 
   return (
     <div className="space-y-6">
@@ -934,13 +1041,15 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
           {accounts.length === 0 && (
             <div className="text-center py-6">
               <p className="text-zinc-400 mb-4">No accounts yet.</p>
-              <button
-                onClick={seedDefaults}
-                className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Seed Defaults
-              </button>
+              {canEdit && (
+                <button
+                  onClick={seedDefaults}
+                  className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Seed Defaults
+                </button>
+              )}
             </div>
           )}
 
@@ -953,57 +1062,63 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
                 >
                   <InlineEdit
                     value={acc.name}
-                    disabled={!canEdit}
-                    onSave={async (v) => { await supabase.from('accounts').update({ name: v }).eq('id', acc.id); loadAccounts(); }}
+                    onSave={(v) => renameAccount(acc.id, v)}
                     className="text-sm font-medium text-white"
+                    disabled={!canEdit}
                   />
-                  {deleteConfirm === acc.id ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-red-400">Delete?</span>
-                      <button
-                        onClick={() => deleteAccount(acc.id)}
-                        className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
-                      >
-                        <Check className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirm(null)}
-                        className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeleteConfirm(acc.id)}
-                      className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                  {canEdit && (
+                    <>
+                      {deleteConfirm === acc.id ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-red-400">Delete?</span>
+                          <button
+                            onClick={() => deleteAccount(acc.id)}
+                            className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm(null)}
+                            className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setDeleteConfirm(acc.id)}
+                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               ))}
             </div>
           )}
 
-          <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
-            <InputField
-              label="Account Name"
-              type="text"
-              value={newAccountName}
-              onChange={setNewAccountName}
-              placeholder="e.g. Savings Account"
-              className="flex-1"
-            />
-            <button
-              onClick={addAccount}
-              disabled={!newAccountName.trim()}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
-            >
-              <Plus className="w-4 h-4" />
-              Add
-            </button>
-          </div>
+          {canEdit && (
+            <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
+              <InputField
+                label="Account Name"
+                type="text"
+                value={newAccountName}
+                onChange={setNewAccountName}
+                placeholder="e.g. Savings Account"
+                className="flex-1"
+              />
+              <button
+                onClick={addAccount}
+                disabled={!newAccountName.trim()}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+              >
+                <Plus className="w-4 h-4" />
+                Add
+              </button>
+            </div>
+          )}
         </Card>
       )}
 
@@ -1020,6 +1135,7 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
               value={date}
               onChange={setDate}
               className="w-48"
+              disabled={!canEdit}
             />
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -1030,15 +1146,18 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
                 value={balances[acc.id] ?? ''}
                 step="0.01"
                 placeholder="0.00"
+                disabled={!canEdit}
                 onChange={(v) =>
                   setBalances((b) => ({ ...b, [acc.id]: parseFloat(v) || 0 }))
                 }
               />
             ))}
           </div>
-          <div className="mt-4 flex justify-end">
-            <SaveButton saving={saving} onClick={handleSave} />
-          </div>
+          {canEdit && (
+            <div className="mt-4 flex justify-end">
+              <SaveButton saving={saving} onClick={handleSave} />
+            </div>
+          )}
         </Card>
       )}
 
@@ -1188,7 +1307,15 @@ function CashFlowTab({ userId, householdId, canEdit }: { userId: string; househo
 
 // ─── REIMBURSEMENTS TAB ──────────────────────────────────────────────────────
 
-function ReimbursementsTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
+function ReimbursementsTab({
+  userId,
+  householdId,
+  canEdit,
+}: {
+  userId: string;
+  householdId: string;
+  canEdit: boolean;
+}) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [reimbursements, setReimbursements] = useState<Reimbursement[]>([]);
@@ -1207,7 +1334,7 @@ function ReimbursementsTab({ userId, householdId, canEdit }: { userId: string; h
       .eq('household_id', householdId)
       .order('date', { ascending: false });
     if (data) setReimbursements(data);
-  }, [userId]);
+  }, [householdId]);
 
   useEffect(() => {
     loadReimbursements();
@@ -1217,7 +1344,8 @@ function ReimbursementsTab({ userId, householdId, canEdit }: { userId: string; h
     if (!form.reason || form.amount <= 0) return;
     setSaving(true);
     await supabase.from('reimbursements').insert({
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
       date: form.date,
       amount: form.amount,
       reason: form.reason,
@@ -1254,62 +1382,64 @@ function ReimbursementsTab({ userId, householdId, canEdit }: { userId: string; h
       </Card>
 
       {/* Entry form */}
-      <Card>
-        <CardHeader>
-          <CardTitle>New Reimbursement</CardTitle>
-        </CardHeader>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <InputField
-            label="Date"
-            type="date"
-            value={form.date}
-            onChange={(v) => setForm((f) => ({ ...f, date: v }))}
-          />
-          <InputField
-            label="Amount ($)"
-            value={form.amount}
-            step="0.01"
-            onChange={(v) => setForm((f) => ({ ...f, amount: parseFloat(v) || 0 }))}
-          />
-          <InputField
-            label="Reason"
-            type="text"
-            value={form.reason}
-            onChange={(v) => setForm((f) => ({ ...f, reason: v }))}
-            className="col-span-2 sm:col-span-1"
-          />
-          <InputField
-            label="Notes"
-            type="text"
-            value={form.notes}
-            placeholder="Optional"
-            onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
-          />
-        </div>
-        <div className="mt-4 flex items-center justify-between">
-          <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={form.paid}
-              onChange={(e) => setForm((f) => ({ ...f, paid: e.target.checked }))}
-              className="rounded bg-zinc-800 border-zinc-700"
+      {canEdit && (
+        <Card>
+          <CardHeader>
+            <CardTitle>New Reimbursement</CardTitle>
+          </CardHeader>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <InputField
+              label="Date"
+              type="date"
+              value={form.date}
+              onChange={(v) => setForm((f) => ({ ...f, date: v }))}
             />
-            Already paid
-          </label>
-          <button
-            onClick={handleAdd}
-            disabled={saving || !form.reason || form.amount <= 0}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-          >
-            {saving ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Plus className="w-4 h-4" />
-            )}
-            Add
-          </button>
-        </div>
-      </Card>
+            <InputField
+              label="Amount ($)"
+              value={form.amount}
+              step="0.01"
+              onChange={(v) => setForm((f) => ({ ...f, amount: parseFloat(v) || 0 }))}
+            />
+            <InputField
+              label="Reason"
+              type="text"
+              value={form.reason}
+              onChange={(v) => setForm((f) => ({ ...f, reason: v }))}
+              className="col-span-2 sm:col-span-1"
+            />
+            <InputField
+              label="Notes"
+              type="text"
+              value={form.notes}
+              placeholder="Optional"
+              onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
+            />
+          </div>
+          <div className="mt-4 flex items-center justify-between">
+            <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.paid}
+                onChange={(e) => setForm((f) => ({ ...f, paid: e.target.checked }))}
+                className="rounded bg-zinc-800 border-zinc-700"
+              />
+              Already paid
+            </label>
+            <button
+              onClick={handleAdd}
+              disabled={saving || !form.reason || form.amount <= 0}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+            >
+              {saving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4" />
+              )}
+              Add
+            </button>
+          </div>
+        </Card>
+      )}
 
       {/* List */}
       <Card>
@@ -1355,18 +1485,20 @@ function ReimbursementsTab({ userId, householdId, canEdit }: { userId: string; h
                 >
                   {formatCurrencyDecimal(r.amount)}
                 </span>
-                <button
-                  onClick={() => togglePaid(r.id, r.paid)}
-                  className={cn(
-                    'p-1.5 rounded-lg transition-colors',
-                    r.paid
-                      ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-400'
-                      : 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400'
-                  )}
-                  title={r.paid ? 'Mark unpaid' : 'Mark paid'}
-                >
-                  {r.paid ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
-                </button>
+                {canEdit && (
+                  <button
+                    onClick={() => togglePaid(r.id, r.paid)}
+                    className={cn(
+                      'p-1.5 rounded-lg transition-colors',
+                      r.paid
+                        ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-400'
+                        : 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400'
+                    )}
+                    title={r.paid ? 'Mark unpaid' : 'Mark paid'}
+                  >
+                    {r.paid ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -1381,7 +1513,15 @@ function ReimbursementsTab({ userId, householdId, canEdit }: { userId: string; h
 
 // ─── NET WORTH TAB ───────────────────────────────────────────────────────────
 
-function NetWorthTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
+function NetWorthTab({
+  userId,
+  householdId,
+  canEdit,
+}: {
+  userId: string;
+  householdId: string;
+  canEdit: boolean;
+}) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -1408,7 +1548,7 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
       .eq('household_id', householdId)
       .order('sort_order');
     if (data) setItems(data);
-  }, [userId]);
+  }, [householdId]);
 
   const loadEntriesForMonth = useCallback(
     async (m: string) => {
@@ -1426,7 +1566,7 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
         setValues(vals);
       }
     },
-    [userId]
+    [householdId]
   );
 
   const loadAllEntries = useCallback(async () => {
@@ -1436,7 +1576,7 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
       .eq('household_id', householdId)
       .order('month');
     if (data) setAllEntries(data);
-  }, [userId]);
+  }, [householdId]);
 
   const loadAll = useCallback(async () => {
     await loadItems();
@@ -1459,7 +1599,8 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
       if (value !== undefined) {
         await supabase.from('net_worth_entries').upsert(
           {
-            user_id: userId, household_id: householdId,
+            user_id: userId,
+            household_id: householdId,
             item_id: item.id,
             month,
             value,
@@ -1476,7 +1617,8 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
     if (!newItemName.trim()) return;
     const sameTypeItems = items.filter((i) => i.type === newItemType);
     await supabase.from('net_worth_items').insert({
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
       type: newItemType,
       name: newItemName.trim(),
       sort_order: sameTypeItems.length,
@@ -1493,19 +1635,26 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
 
   const seedDefaults = async () => {
     const assetRows = DEFAULT_NET_WORTH_ASSETS.map((name, i) => ({
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
       type: 'asset' as const,
       name,
       sort_order: i,
     }));
     const liabilityRows = DEFAULT_NET_WORTH_LIABILITIES.map((name, i) => ({
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
       type: 'liability' as const,
       name,
       sort_order: i,
     }));
     await supabase.from('net_worth_items').insert([...assetRows, ...liabilityRows]);
     await loadAll();
+  };
+
+  const renameItem = async (itemId: string, newName: string) => {
+    await supabase.from('net_worth_items').update({ name: newName }).eq('id', itemId);
+    await loadItems();
   };
 
   // Compute totals from current values
@@ -1546,33 +1695,37 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
           >
             <InlineEdit
               value={item.name}
-              disabled={!canEdit}
-              onSave={async (v) => { await supabase.from('net_worth_items').update({ name: v }).eq('id', item.id); loadItems(); }}
+              onSave={(v) => renameItem(item.id, v)}
               className="text-sm font-medium text-white"
+              disabled={!canEdit}
             />
-            {deleteConfirm === item.id ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-red-400">Delete?</span>
-                <button
-                  onClick={() => deleteItem(item.id)}
-                  className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
-                >
-                  <Check className="w-3 h-3" />
-                </button>
-                <button
-                  onClick={() => setDeleteConfirm(null)}
-                  className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setDeleteConfirm(item.id)}
-                className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
+            {canEdit && (
+              <>
+                {deleteConfirm === item.id ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-red-400">Delete?</span>
+                    <button
+                      onClick={() => deleteItem(item.id)}
+                      className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                    >
+                      <Check className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => setDeleteConfirm(null)}
+                      className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setDeleteConfirm(item.id)}
+                    className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                )}
+              </>
             )}
           </div>
         ))}
@@ -1630,13 +1783,15 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
           {items.length === 0 && (
             <div className="text-center py-6">
               <p className="text-zinc-400 mb-4">No items yet.</p>
-              <button
-                onClick={seedDefaults}
-                className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Seed Defaults
-              </button>
+              {canEdit && (
+                <button
+                  onClick={seedDefaults}
+                  className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Seed Defaults
+                </button>
+              )}
             </div>
           )}
 
@@ -1648,35 +1803,37 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
           )}
 
           {/* Add new item */}
-          <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
-            <InputField
-              label="Item Name"
-              type="text"
-              value={newItemName}
-              onChange={setNewItemName}
-              placeholder="e.g. Real Estate"
-              className="flex-1"
-            />
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-zinc-400">Type</label>
-              <select
-                value={newItemType}
-                onChange={(e) => setNewItemType(e.target.value as 'asset' | 'liability')}
-                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+          {canEdit && (
+            <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
+              <InputField
+                label="Item Name"
+                type="text"
+                value={newItemName}
+                onChange={setNewItemName}
+                placeholder="e.g. Real Estate"
+                className="flex-1"
+              />
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-zinc-400">Type</label>
+                <select
+                  value={newItemType}
+                  onChange={(e) => setNewItemType(e.target.value as 'asset' | 'liability')}
+                  className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                >
+                  <option value="asset">Asset</option>
+                  <option value="liability">Liability</option>
+                </select>
+              </div>
+              <button
+                onClick={addItem}
+                disabled={!newItemName.trim()}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
               >
-                <option value="asset">Asset</option>
-                <option value="liability">Liability</option>
-              </select>
+                <Plus className="w-4 h-4" />
+                Add
+              </button>
             </div>
-            <button
-              onClick={addItem}
-              disabled={!newItemName.trim()}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
-            >
-              <Plus className="w-4 h-4" />
-              Add
-            </button>
-          </div>
+          )}
         </Card>
       )}
 
@@ -1695,6 +1852,7 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
                 if (v) setMonth(v + '-01');
               }}
               className="w-48"
+              disabled={!canEdit}
             />
           </div>
 
@@ -1710,6 +1868,7 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
                     value={values[item.id] ?? ''}
                     step="0.01"
                     placeholder="0.00"
+                    disabled={!canEdit}
                     onChange={(v) =>
                       setValues((vals) => ({ ...vals, [item.id]: parseFloat(v) || 0 }))
                     }
@@ -1729,6 +1888,7 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
                     value={values[item.id] ?? ''}
                     step="0.01"
                     placeholder="0.00"
+                    disabled={!canEdit}
                     onChange={(v) =>
                       setValues((vals) => ({ ...vals, [item.id]: parseFloat(v) || 0 }))
                     }
@@ -1738,9 +1898,11 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
             </div>
           </div>
 
-          <div className="mt-4 flex justify-end">
-            <SaveButton saving={saving} onClick={handleSave} />
-          </div>
+          {canEdit && (
+            <div className="mt-4 flex justify-end">
+              <SaveButton saving={saving} onClick={handleSave} />
+            </div>
+          )}
         </Card>
       )}
 
@@ -1812,7 +1974,15 @@ function NetWorthTab({ userId, householdId, canEdit }: { userId: string; househo
 
 // ─── INVESTMENTS TAB ─────────────────────────────────────────────────────────
 
-function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
+function InvestmentsTab({
+  userId,
+  householdId,
+  canEdit,
+}: {
+  userId: string;
+  householdId: string;
+  canEdit: boolean;
+}) {
   const supabase = createClient();
   const [holdings, setHoldings] = useState<Investment[]>([]);
   const [editValues, setEditValues] = useState<Record<string, string>>({});
@@ -1828,14 +1998,13 @@ function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; hous
       .order('symbol');
     if (data) {
       setHoldings(data);
-      // Init edit values
       const vals: Record<string, string> = {};
       data.forEach((h) => {
         vals[h.id] = h.current_value_cad.toString();
       });
       setEditValues(vals);
     }
-  }, [userId]);
+  }, [householdId]);
 
   useEffect(() => {
     loadHoldings();
@@ -1845,7 +2014,8 @@ function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; hous
     setSeeding(true);
     const rows = DEFAULT_HOLDINGS.map((h) => ({
       ...h,
-      user_id: userId, household_id: householdId,
+      user_id: userId,
+      household_id: householdId,
     }));
     await supabase.from('investments').insert(rows);
     await loadHoldings();
@@ -1866,17 +2036,17 @@ function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; hous
 
   const totalValue = holdings.reduce((s, h) => s + h.current_value_cad, 0);
 
-  // Group by tier
   const tiers = Object.keys(TIER_LABELS) as Investment['tier'][];
   const grouped = tiers.map((tier) => ({
     tier,
     label: TIER_LABELS[tier],
     target: TIER_TARGETS[tier],
     holdings: holdings.filter((h) => h.tier === tier),
-    totalValue: holdings.filter((h) => h.tier === tier).reduce((s, h) => s + h.current_value_cad, 0),
+    totalValue: holdings
+      .filter((h) => h.tier === tier)
+      .reduce((s, h) => s + h.current_value_cad, 0),
   }));
 
-  // Pie chart data
   const actualPieData = grouped.map((g) => ({
     name: g.label.split(' (')[0],
     value: totalValue > 0 ? (g.totalValue / totalValue) * 100 : 0,
@@ -1895,18 +2065,20 @@ function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; hous
         <div className="text-center py-12">
           <PieIcon className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
           <p className="text-zinc-400 mb-4">No investment holdings yet.</p>
-          <button
-            onClick={seedHoldings}
-            disabled={seeding}
-            className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-          >
-            {seeding ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Plus className="w-4 h-4" />
-            )}
-            Seed Default Holdings
-          </button>
+          {canEdit && (
+            <button
+              onClick={seedHoldings}
+              disabled={seeding}
+              className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+            >
+              {seeding ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4" />
+              )}
+              Seed Default Holdings
+            </button>
+          )}
         </div>
       </Card>
     );
@@ -1997,7 +2169,8 @@ function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; hous
                 {formatCurrencyDecimal(g.totalValue)}
                 {totalValue > 0 && (
                   <span className="ml-2">
-                    ({((g.totalValue / totalValue) * 100).toFixed(1)}% actual / {(g.target * 100).toFixed(0)}% target)
+                    ({((g.totalValue / totalValue) * 100).toFixed(1)}% actual /{' '}
+                    {(g.target * 100).toFixed(0)}% target)
                   </span>
                 )}
               </div>
@@ -2017,6 +2190,7 @@ function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; hous
                     type="number"
                     step="0.01"
                     value={editValues[h.id] ?? ''}
+                    disabled={!canEdit}
                     onChange={(e) =>
                       setEditValues((v) => ({ ...v, [h.id]: e.target.value }))
                     }
@@ -2024,7 +2198,7 @@ function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; hous
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') updateValue(h.id);
                     }}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                 </div>
                 <div className="text-xs text-zinc-500 w-20 text-right">

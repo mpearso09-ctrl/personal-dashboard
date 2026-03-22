@@ -47,7 +47,13 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
   const load = useCallback(async () => {
     if (!user) { setLoading(false); return; }
 
-    // Find user's household membership
+    // First check if user owns a household (avoids RLS issues on household_members)
+    const { data: ownedHouseholds } = await supabase
+      .from('households')
+      .select('*')
+      .eq('owner_id', user.id);
+
+    // Also check memberships
     const { data: memberRows } = await supabase
       .from('household_members')
       .select('*, households(*)')
@@ -81,18 +87,36 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         );
         setMembers(membersWithEmail);
       }
+    } else if (ownedHouseholds && ownedHouseholds.length > 0) {
+      // User owns a household but isn't in household_members yet (edge case)
+      const hh = ownedHouseholds[0];
+      setHousehold(hh);
+      await supabase
+        .from('household_members')
+        .upsert({ household_id: hh.id, user_id: user.id, finance_role: 'full_access' }, { onConflict: 'household_id,user_id' });
+      setMembers([{ id: '', household_id: hh.id, user_id: user.id, finance_role: 'full_access', created_at: '', email: user.email ?? '' }]);
     } else {
       // No household yet — auto-create one
-      const { data: newHH } = await supabase
+      const { data: newHH, error: hhError } = await supabase
         .from('households')
         .insert({ name: 'My Household', owner_id: user.id })
         .select()
         .single();
 
+      if (hhError) {
+        console.error('Failed to create household:', hhError);
+        setLoading(false);
+        return;
+      }
+
       if (newHH) {
-        await supabase
+        const { error: memError } = await supabase
           .from('household_members')
           .insert({ household_id: newHH.id, user_id: user.id, finance_role: 'full_access' });
+
+        if (memError) {
+          console.error('Failed to add member:', memError);
+        }
 
         setHousehold(newHH);
         setMembers([{ id: '', household_id: newHH.id, user_id: user.id, finance_role: 'full_access', created_at: '', email: user.email ?? '' }]);
