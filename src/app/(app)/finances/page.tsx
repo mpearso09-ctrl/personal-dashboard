@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/components/auth-provider';
+import { useHousehold } from '@/components/household-provider';
 import { createClient } from '@/lib/supabase-browser';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -77,7 +78,7 @@ const TIER_COLORS: Record<Investment['tier'], string> = {
   asymmetric_upside: '#f59e0b',
 };
 
-const DEFAULT_HOLDINGS: Omit<Investment, 'id' | 'user_id' | 'last_updated'>[] = [
+const DEFAULT_HOLDINGS: Omit<Investment, 'id' | 'user_id' | 'household_id' | 'last_updated'>[] = [
   { tier: 'growth_engine', symbol: 'VTI', current_value_cad: 0, target_pct: 35 },
   { tier: 'growth_engine', symbol: 'VEA', current_value_cad: 0, target_pct: 20 },
   { tier: 'innovation_satellite', symbol: 'ARKQ', current_value_cad: 0, target_pct: 4 },
@@ -161,6 +162,35 @@ function SaveButton({ saving, onClick }: { saving: boolean; onClick: () => void 
   );
 }
 
+function InlineEdit({ value, onSave, className, disabled }: { value: string; onSave: (v: string) => void; className?: string; disabled?: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => { setDraft(value); }, [value]);
+
+  if (disabled || !editing) {
+    return (
+      <span
+        onClick={() => !disabled && setEditing(true)}
+        className={cn(disabled ? '' : 'cursor-pointer hover:text-blue-400', className)}
+        title={disabled ? undefined : 'Click to edit'}
+      >
+        {value}
+      </span>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => { if (draft.trim() && draft !== value) onSave(draft.trim()); setEditing(false); }}
+      onKeyDown={(e) => { if (e.key === 'Enter') { if (draft.trim() && draft !== value) onSave(draft.trim()); setEditing(false); } if (e.key === 'Escape') { setDraft(value); setEditing(false); } }}
+      className="px-2 py-1 bg-zinc-800 border border-blue-500 rounded text-sm text-white focus:outline-none w-full"
+    />
+  );
+}
+
 // ─── Date helpers ────────────────────────────────────────────────────────────
 
 function getMonthStart(date: string): string {
@@ -193,6 +223,7 @@ function getYesterday(): string {
 
 export default function FinancesPage() {
   const { user, loading: authLoading } = useAuth();
+  const { householdId, canEditFinances } = useHousehold();
   const [activeTab, setActiveTab] = useState<Tab>('Budget');
 
   if (authLoading) {
@@ -203,9 +234,9 @@ export default function FinancesPage() {
     );
   }
 
-  if (!user) {
+  if (!user || !householdId) {
     return (
-      <div className="text-center text-zinc-400 py-20">Please sign in to view finances.</div>
+      <div className="text-center text-zinc-400 py-20">Setting up household...</div>
     );
   }
 
@@ -233,18 +264,18 @@ export default function FinancesPage() {
       </div>
 
       {/* Tab panels */}
-      {activeTab === 'Budget' && <BudgetTab userId={user.id} />}
-      {activeTab === 'Cash Flow' && <CashFlowTab userId={user.id} />}
-      {activeTab === 'Reimbursements' && <ReimbursementsTab userId={user.id} />}
-      {activeTab === 'Net Worth' && <NetWorthTab userId={user.id} />}
-      {activeTab === 'Investments' && <InvestmentsTab userId={user.id} />}
+      {activeTab === 'Budget' && <BudgetTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
+      {activeTab === 'Cash Flow' && <CashFlowTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
+      {activeTab === 'Reimbursements' && <ReimbursementsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
+      {activeTab === 'Net Worth' && <NetWorthTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
+      {activeTab === 'Investments' && <InvestmentsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />}
     </div>
   );
 }
 
 // ─── BUDGET TAB ──────────────────────────────────────────────────────────────
 
-function BudgetTab({ userId }: { userId: string }) {
+function BudgetTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -264,7 +295,7 @@ function BudgetTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('budget_categories')
       .select('*')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .order('sort_order');
     if (data) setCategories(data);
   }, [userId]);
@@ -274,7 +305,7 @@ function BudgetTab({ userId }: { userId: string }) {
       const { data } = await supabase
         .from('budget_daily')
         .select('*')
-        .eq('user_id', userId)
+        .eq('household_id', householdId)
         .eq('date', d);
       if (data) {
         setEntries(data);
@@ -297,7 +328,7 @@ function BudgetTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('budget_daily')
       .select('*')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .gte('date', weekStart)
       .lte('date', weekEnd);
     if (data) setWeekEntries(data);
@@ -309,7 +340,7 @@ function BudgetTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('budget_daily')
       .select('*')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .gte('date', monthStart)
       .lte('date', monthEnd);
     if (data) setMonthEntries(data);
@@ -320,7 +351,7 @@ function BudgetTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('budget_daily')
       .select('*')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .gte('date', startDate)
       .lte('date', getToday());
     if (data) {
@@ -360,13 +391,13 @@ function BudgetTab({ userId }: { userId: string }) {
       if (amount > 0 || note) {
         await supabase.from('budget_daily').upsert(
           {
-            user_id: userId,
+            user_id: userId, household_id: householdId,
             date,
             category_id: cat.id,
             amount,
             notes: note,
           },
-          { onConflict: 'user_id,date,category_id' }
+          { onConflict: 'household_id,date,category_id' }
         );
       }
     }
@@ -377,7 +408,7 @@ function BudgetTab({ userId }: { userId: string }) {
   const addCategory = async () => {
     if (!newCatName.trim() || newCatAmount <= 0) return;
     await supabase.from('budget_categories').insert({
-      user_id: userId,
+      user_id: userId, household_id: householdId,
       name: newCatName.trim(),
       monthly_amount: newCatAmount,
       sort_order: categories.length,
@@ -395,7 +426,7 @@ function BudgetTab({ userId }: { userId: string }) {
 
   const seedDefaults = async () => {
     const rows = DEFAULT_BUDGET_CATEGORIES.map((c, i) => ({
-      user_id: userId,
+      user_id: userId, household_id: householdId,
       name: c.name,
       monthly_amount: c.monthly_amount,
       sort_order: i,
@@ -452,12 +483,20 @@ function BudgetTab({ userId }: { userId: string }) {
                   key={cat.id}
                   className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
                 >
-                  <div>
-                    <span className="text-sm font-medium text-white">{cat.name}</span>
-                    <span className="text-xs text-zinc-400 ml-3">
-                      {formatCurrency(cat.monthly_amount)}/mo
-                    </span>
-                    <span className="text-xs text-zinc-500 ml-2">
+                  <div className="flex items-center gap-3">
+                    <InlineEdit
+                      value={cat.name}
+                      disabled={!canEdit}
+                      onSave={async (v) => { await supabase.from('budget_categories').update({ name: v }).eq('id', cat.id); loadCategories(); }}
+                      className="text-sm font-medium text-white"
+                    />
+                    <InlineEdit
+                      value={String(cat.monthly_amount)}
+                      disabled={!canEdit}
+                      onSave={async (v) => { await supabase.from('budget_categories').update({ monthly_amount: Number(v) }).eq('id', cat.id); loadCategories(); }}
+                      className="text-xs text-zinc-400"
+                    />
+                    <span className="text-xs text-zinc-500">
                       ({formatCurrency(Math.round(cat.monthly_amount / 4.333))}/wk)
                     </span>
                   </div>
@@ -723,7 +762,7 @@ function BudgetTab({ userId }: { userId: string }) {
 
 // ─── CASH FLOW TAB ───────────────────────────────────────────────────────────
 
-function CashFlowTab({ userId }: { userId: string }) {
+function CashFlowTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -740,7 +779,7 @@ function CashFlowTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('accounts')
       .select('*')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .order('sort_order');
     if (data) setAccounts(data);
   }, [userId]);
@@ -750,7 +789,7 @@ function CashFlowTab({ userId }: { userId: string }) {
       const { data } = await supabase
         .from('account_balances')
         .select('*')
-        .eq('user_id', userId)
+        .eq('household_id', householdId)
         .eq('date', d);
       if (data) {
         const bals: Record<string, number> = {};
@@ -778,7 +817,7 @@ function CashFlowTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('account_balances')
       .select('*, accounts(name)')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .gte('date', ninetyDaysAgo)
       .order('date');
     if (data) {
@@ -826,12 +865,12 @@ function CashFlowTab({ userId }: { userId: string }) {
       if (balance !== undefined) {
         await supabase.from('account_balances').upsert(
           {
-            user_id: userId,
+            user_id: userId, household_id: householdId,
             account_id: acc.id,
             date,
             balance,
           },
-          { onConflict: 'user_id,account_id,date' }
+          { onConflict: 'household_id,account_id,date' }
         );
       }
     }
@@ -842,7 +881,7 @@ function CashFlowTab({ userId }: { userId: string }) {
   const addAccount = async () => {
     if (!newAccountName.trim()) return;
     await supabase.from('accounts').insert({
-      user_id: userId,
+      user_id: userId, household_id: householdId,
       name: newAccountName.trim(),
       sort_order: accounts.length,
     });
@@ -858,7 +897,7 @@ function CashFlowTab({ userId }: { userId: string }) {
 
   const seedDefaults = async () => {
     const rows = DEFAULT_ACCOUNTS.map((name, i) => ({
-      user_id: userId,
+      user_id: userId, household_id: householdId,
       name,
       sort_order: i,
     }));
@@ -912,7 +951,12 @@ function CashFlowTab({ userId }: { userId: string }) {
                   key={acc.id}
                   className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
                 >
-                  <span className="text-sm font-medium text-white">{acc.name}</span>
+                  <InlineEdit
+                    value={acc.name}
+                    disabled={!canEdit}
+                    onSave={async (v) => { await supabase.from('accounts').update({ name: v }).eq('id', acc.id); loadAccounts(); }}
+                    className="text-sm font-medium text-white"
+                  />
                   {deleteConfirm === acc.id ? (
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-red-400">Delete?</span>
@@ -1144,7 +1188,7 @@ function CashFlowTab({ userId }: { userId: string }) {
 
 // ─── REIMBURSEMENTS TAB ──────────────────────────────────────────────────────
 
-function ReimbursementsTab({ userId }: { userId: string }) {
+function ReimbursementsTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [reimbursements, setReimbursements] = useState<Reimbursement[]>([]);
@@ -1160,7 +1204,7 @@ function ReimbursementsTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('reimbursements')
       .select('*')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .order('date', { ascending: false });
     if (data) setReimbursements(data);
   }, [userId]);
@@ -1173,7 +1217,7 @@ function ReimbursementsTab({ userId }: { userId: string }) {
     if (!form.reason || form.amount <= 0) return;
     setSaving(true);
     await supabase.from('reimbursements').insert({
-      user_id: userId,
+      user_id: userId, household_id: householdId,
       date: form.date,
       amount: form.amount,
       reason: form.reason,
@@ -1337,7 +1381,7 @@ function ReimbursementsTab({ userId }: { userId: string }) {
 
 // ─── NET WORTH TAB ───────────────────────────────────────────────────────────
 
-function NetWorthTab({ userId }: { userId: string }) {
+function NetWorthTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -1361,7 +1405,7 @@ function NetWorthTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('net_worth_items')
       .select('*')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .order('sort_order');
     if (data) setItems(data);
   }, [userId]);
@@ -1371,7 +1415,7 @@ function NetWorthTab({ userId }: { userId: string }) {
       const { data } = await supabase
         .from('net_worth_entries')
         .select('*, net_worth_items(name, type)')
-        .eq('user_id', userId)
+        .eq('household_id', householdId)
         .eq('month', m);
       if (data) {
         setCurrentEntries(data);
@@ -1389,7 +1433,7 @@ function NetWorthTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('net_worth_entries')
       .select('*, net_worth_items(type)')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .order('month');
     if (data) setAllEntries(data);
   }, [userId]);
@@ -1415,12 +1459,12 @@ function NetWorthTab({ userId }: { userId: string }) {
       if (value !== undefined) {
         await supabase.from('net_worth_entries').upsert(
           {
-            user_id: userId,
+            user_id: userId, household_id: householdId,
             item_id: item.id,
             month,
             value,
           },
-          { onConflict: 'user_id,item_id,month' }
+          { onConflict: 'household_id,item_id,month' }
         );
       }
     }
@@ -1432,7 +1476,7 @@ function NetWorthTab({ userId }: { userId: string }) {
     if (!newItemName.trim()) return;
     const sameTypeItems = items.filter((i) => i.type === newItemType);
     await supabase.from('net_worth_items').insert({
-      user_id: userId,
+      user_id: userId, household_id: householdId,
       type: newItemType,
       name: newItemName.trim(),
       sort_order: sameTypeItems.length,
@@ -1449,13 +1493,13 @@ function NetWorthTab({ userId }: { userId: string }) {
 
   const seedDefaults = async () => {
     const assetRows = DEFAULT_NET_WORTH_ASSETS.map((name, i) => ({
-      user_id: userId,
+      user_id: userId, household_id: householdId,
       type: 'asset' as const,
       name,
       sort_order: i,
     }));
     const liabilityRows = DEFAULT_NET_WORTH_LIABILITIES.map((name, i) => ({
-      user_id: userId,
+      user_id: userId, household_id: householdId,
       type: 'liability' as const,
       name,
       sort_order: i,
@@ -1500,7 +1544,12 @@ function NetWorthTab({ userId }: { userId: string }) {
             key={item.id}
             className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
           >
-            <span className="text-sm font-medium text-white">{item.name}</span>
+            <InlineEdit
+              value={item.name}
+              disabled={!canEdit}
+              onSave={async (v) => { await supabase.from('net_worth_items').update({ name: v }).eq('id', item.id); loadItems(); }}
+              className="text-sm font-medium text-white"
+            />
             {deleteConfirm === item.id ? (
               <div className="flex items-center gap-2">
                 <span className="text-xs text-red-400">Delete?</span>
@@ -1763,7 +1812,7 @@ function NetWorthTab({ userId }: { userId: string }) {
 
 // ─── INVESTMENTS TAB ─────────────────────────────────────────────────────────
 
-function InvestmentsTab({ userId }: { userId: string }) {
+function InvestmentsTab({ userId, householdId, canEdit }: { userId: string; householdId: string; canEdit: boolean }) {
   const supabase = createClient();
   const [holdings, setHoldings] = useState<Investment[]>([]);
   const [editValues, setEditValues] = useState<Record<string, string>>({});
@@ -1774,7 +1823,7 @@ function InvestmentsTab({ userId }: { userId: string }) {
     const { data } = await supabase
       .from('investments')
       .select('*')
-      .eq('user_id', userId)
+      .eq('household_id', householdId)
       .order('tier')
       .order('symbol');
     if (data) {
@@ -1796,7 +1845,7 @@ function InvestmentsTab({ userId }: { userId: string }) {
     setSeeding(true);
     const rows = DEFAULT_HOLDINGS.map((h) => ({
       ...h,
-      user_id: userId,
+      user_id: userId, household_id: householdId,
     }));
     await supabase.from('investments').insert(rows);
     await loadHoldings();

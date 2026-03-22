@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
+import { useHousehold } from '@/components/household-provider';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, getToday, getWeekStart, getDayOfChallenge, getStatusColor, cn } from '@/lib/utils';
 import type { FitnessDaily, FitnessGoals, BudgetCategory, BudgetDailyEntry, NetWorthItem, NetWorthEntry } from '@/lib/types';
@@ -15,6 +16,7 @@ interface WeekBudgetSummary {
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { householdId } = useHousehold();
   const supabase = createClient();
 
   const [todayEntry, setTodayEntry] = useState<FitnessDaily | null>(null);
@@ -24,7 +26,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !householdId) return;
 
     async function load() {
       const today = getToday();
@@ -38,10 +40,10 @@ export default function DashboardPage() {
       const [fitRes, goalRes, catsRes, weekEntriesRes, nwItemsRes, nwEntriesRes] = await Promise.all([
         supabase.from('fitness_daily').select('*').eq('user_id', user!.id).eq('date', today).maybeSingle(),
         supabase.from('fitness_goals').select('*').eq('user_id', user!.id).maybeSingle(),
-        supabase.from('budget_categories').select('*').eq('user_id', user!.id).order('sort_order'),
-        supabase.from('budget_daily').select('*').eq('user_id', user!.id).gte('date', weekStart).lte('date', weekEndStr),
-        supabase.from('net_worth_items').select('*').eq('user_id', user!.id),
-        supabase.from('net_worth_entries').select('*, net_worth_items(type)').eq('user_id', user!.id).order('month', { ascending: false }),
+        supabase.from('budget_categories').select('*').eq('household_id', householdId).order('sort_order'),
+        supabase.from('budget_daily').select('*').eq('household_id', householdId).gte('date', weekStart).lte('date', weekEndStr),
+        supabase.from('net_worth_items').select('*').eq('household_id', householdId),
+        supabase.from('net_worth_entries').select('*, net_worth_items(type)').eq('household_id', householdId).order('month', { ascending: false }),
       ]);
 
       setTodayEntry(fitRes.data);
@@ -75,7 +77,7 @@ export default function DashboardPage() {
     }
 
     load();
-  }, [user]);
+  }, [user, householdId]);
 
   if (!user || loading) {
     return (

@@ -6,6 +6,7 @@ import type { FitnessDaily, FitnessWeekly, FitnessGoals } from '@/lib/types';
 import { getToday, getWeekStart, getDayOfChallenge, getStatusColor, cn, formatDate } from '@/lib/utils';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/components/auth-provider';
+import { useHousehold } from '@/components/household-provider';
 import {
   Dumbbell, Footprints, Moon, Flame, Beef, Wheat, Droplets, Salad,
   Save, Check, X, ChevronLeft, ChevronRight, Calendar, Weight,
@@ -75,7 +76,12 @@ const tabs: { key: TabKey; label: string; icon: typeof Dumbbell }[] = [
 
 export default function FitnessPage() {
   const { user, loading: authLoading } = useAuth();
+  const { householdUsers } = useHousehold();
+  const [viewingUserId, setViewingUserId] = useState<string | null>(null);
   const supabase = createClient();
+
+  const effectiveUserId = user ? (viewingUserId ?? user.id) : '';
+  const isViewingOther = viewingUserId !== null && user !== null && viewingUserId !== user.id;
 
   const [activeTab, setActiveTab] = useState<TabKey>('today');
 
@@ -121,17 +127,17 @@ export default function FitnessPage() {
     const { data } = await supabase
       .from('fitness_goals')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .single();
     if (data) setGoals(data as FitnessGoals);
-  }, [user]);
+  }, [user, effectiveUserId]);
 
   const fetchDaily = useCallback(async () => {
     if (!user) return;
     const { data } = await supabase
       .from('fitness_daily')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .eq('date', selectedDate)
       .single();
     if (data) {
@@ -139,14 +145,14 @@ export default function FitnessPage() {
     } else {
       setDailyForm({ workout: false, mobility: false, training_quality: null, notes: '', weight_lbs: null, body_fat_pct: null });
     }
-  }, [user, selectedDate]);
+  }, [user, selectedDate, effectiveUserId]);
 
   const fetchWeekly = useCallback(async () => {
     if (!user) return;
     const { data } = await supabase
       .from('fitness_weekly')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .eq('date', weeklyDate)
       .single();
     if (data) {
@@ -154,18 +160,18 @@ export default function FitnessPage() {
     } else {
       setWeeklyForm({ photo_taken: false });
     }
-  }, [user, weeklyDate]);
+  }, [user, weeklyDate, effectiveUserId]);
 
   const fetchHistory = useCallback(async () => {
     if (!user) return;
     const { data } = await supabase
       .from('fitness_daily')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .order('date', { ascending: false })
       .limit(14);
     if (data) setHistoryEntries(data as FitnessDaily[]);
-  }, [user]);
+  }, [user, effectiveUserId]);
 
   const fetchTrends = useCallback(async () => {
     if (!user) return;
@@ -174,7 +180,7 @@ export default function FitnessPage() {
     const { data: wData } = await supabase
       .from('fitness_daily')
       .select('date, weight_lbs')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .not('weight_lbs', 'is', null)
       .order('date');
     if (wData) setWeightTrend(wData as { date: string; weight_lbs: number }[]);
@@ -183,7 +189,7 @@ export default function FitnessPage() {
     const { data: bfData } = await supabase
       .from('fitness_daily')
       .select('date, body_fat_pct')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .not('body_fat_pct', 'is', null)
       .order('date');
     if (bfData) setBodyFatTrend(bfData as { date: string; body_fat_pct: number }[]);
@@ -193,11 +199,11 @@ export default function FitnessPage() {
     const { data: dData } = await supabase
       .from('fitness_daily')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .gte('date', thirtyAgo)
       .order('date', { ascending: true });
     if (dData) setLast30Daily(dData as FitnessDaily[]);
-  }, [user]);
+  }, [user, effectiveUserId]);
 
   // =========================================================================
   // Effects
@@ -412,7 +418,8 @@ export default function FitnessPage() {
                   weight_lbs: e.target.value === '' ? null : Number(e.target.value),
                 }))
               }
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white"
+              disabled={isViewingOther}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
               placeholder="— (optional)"
             />
           </div>
@@ -432,7 +439,8 @@ export default function FitnessPage() {
                   body_fat_pct: e.target.value === '' ? null : Number(e.target.value),
                 }))
               }
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white"
+              disabled={isViewingOther}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
               placeholder="— (optional)"
             />
           </div>
@@ -470,8 +478,9 @@ export default function FitnessPage() {
                       [f.name]: e.target.value === '' ? null : e.target.value,
                     }))
                   }
+                  disabled={isViewingOther}
                   className={cn(
-                    'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm',
+                    'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm disabled:opacity-50',
                     color
                   )}
                   placeholder="—"
@@ -494,8 +503,9 @@ export default function FitnessPage() {
                     [f.name]: !checked,
                   }))
                 }
+                disabled={isViewingOther}
                 className={cn(
-                  'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors',
+                  'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50',
                   checked
                     ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
                     : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600'
@@ -525,7 +535,8 @@ export default function FitnessPage() {
                 training_quality: Number(e.target.value),
               }))
             }
-            className="w-full max-w-sm accent-blue-500"
+            disabled={isViewingOther}
+            className="w-full max-w-sm accent-blue-500 disabled:opacity-50"
           />
         </div>
 
@@ -536,27 +547,30 @@ export default function FitnessPage() {
             value={dailyForm.notes ?? ''}
             onChange={(e) => setDailyForm((prev) => ({ ...prev, notes: e.target.value }))}
             rows={2}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white resize-none"
+            disabled={isViewingOther}
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white resize-none disabled:opacity-50"
             placeholder="Optional notes..."
           />
         </div>
 
         {/* Save */}
-        <div className="mt-6 flex items-center gap-3">
-          <button
-            onClick={saveDaily}
-            disabled={saving}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
-          >
-            <Save className="h-4 w-4" />
-            {saving ? 'Saving...' : 'Save Entry'}
-          </button>
-          {saveMessage && (
-            <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
-              {saveMessage}
-            </span>
-          )}
-        </div>
+        {!isViewingOther && (
+          <div className="mt-6 flex items-center gap-3">
+            <button
+              onClick={saveDaily}
+              disabled={saving}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              <Save className="h-4 w-4" />
+              {saving ? 'Saving...' : 'Save Entry'}
+            </button>
+            {saveMessage && (
+              <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
+                {saveMessage}
+              </span>
+            )}
+          </div>
+        )}
       </Card>
     </div>
   );
@@ -590,8 +604,9 @@ export default function FitnessPage() {
           <div>
             <button
               onClick={() => setWeeklyForm((prev) => ({ ...prev, photo_taken: !prev.photo_taken }))}
+              disabled={isViewingOther}
               className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors',
+                'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50',
                 weeklyForm.photo_taken
                   ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
                   : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600'
@@ -607,21 +622,23 @@ export default function FitnessPage() {
           </p>
 
           {/* Save */}
-          <div className="mt-6 flex items-center gap-3">
-            <button
-              onClick={saveWeekly}
-              disabled={saving}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
-            >
-              <Save className="h-4 w-4" />
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-            {saveMessage && (
-              <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
-                {saveMessage}
-              </span>
-            )}
-          </div>
+          {!isViewingOther && (
+            <div className="mt-6 flex items-center gap-3">
+              <button
+                onClick={saveWeekly}
+                disabled={saving}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                <Save className="h-4 w-4" />
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+              {saveMessage && (
+                <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
+                  {saveMessage}
+                </span>
+              )}
+            </div>
+          )}
         </Card>
       </div>
     );
@@ -829,10 +846,35 @@ export default function FitnessPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-        <Dumbbell className="h-7 w-7 text-blue-500" />
-        Fitness
-      </h1>
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+          <Dumbbell className="h-7 w-7 text-blue-500" />
+          Fitness
+        </h1>
+
+        {householdUsers.length > 1 && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-zinc-400">Viewing:</span>
+            <select
+              value={viewingUserId ?? user!.id}
+              onChange={(e) => setViewingUserId(e.target.value === user!.id ? null : e.target.value)}
+              className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white"
+            >
+              {householdUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.id === user!.id ? 'My Data' : u.email}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {isViewingOther && (
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm">
+          Viewing read-only — this is {householdUsers.find(u => u.id === viewingUserId)?.email}&apos;s data
+        </div>
+      )}
 
       {/* Tab bar */}
       <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">

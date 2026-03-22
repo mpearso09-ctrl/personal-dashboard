@@ -1,3 +1,22 @@
+// ---- Household ----
+
+export interface Household {
+  id: string;
+  name: string;
+  owner_id: string;
+  created_at: string;
+}
+
+export interface HouseholdMember {
+  id: string;
+  household_id: string;
+  user_id: string;
+  finance_role: 'full_access' | 'view_only';
+  created_at: string;
+}
+
+// ---- Fitness (per-user) ----
+
 export interface FitnessDaily {
   id: string;
   user_id: string;
@@ -51,10 +70,11 @@ export interface FitnessGoals {
   updated_at: string;
 }
 
-// ---- Budget (dynamic categories) ----
+// ---- Budget (household-scoped, dynamic categories) ----
 
 export interface BudgetCategory {
   id: string;
+  household_id: string;
   user_id: string;
   name: string;
   monthly_amount: number;
@@ -64,6 +84,7 @@ export interface BudgetCategory {
 
 export interface BudgetDailyEntry {
   id: string;
+  household_id: string;
   user_id: string;
   date: string;
   category_id: string;
@@ -72,10 +93,11 @@ export interface BudgetDailyEntry {
   created_at: string;
 }
 
-// ---- Cash Flow (dynamic accounts, daily balances) ----
+// ---- Cash Flow (household-scoped, dynamic accounts) ----
 
 export interface Account {
   id: string;
+  household_id: string;
   user_id: string;
   name: string;
   sort_order: number;
@@ -84,6 +106,7 @@ export interface Account {
 
 export interface AccountBalance {
   id: string;
+  household_id: string;
   user_id: string;
   account_id: string;
   date: string;
@@ -91,10 +114,11 @@ export interface AccountBalance {
   created_at: string;
 }
 
-// ---- Net Worth (dynamic items) ----
+// ---- Net Worth (household-scoped, dynamic items) ----
 
 export interface NetWorthItem {
   id: string;
+  household_id: string;
   user_id: string;
   type: 'asset' | 'liability';
   name: string;
@@ -104,6 +128,7 @@ export interface NetWorthItem {
 
 export interface NetWorthEntry {
   id: string;
+  household_id: string;
   user_id: string;
   item_id: string;
   month: string;
@@ -111,10 +136,11 @@ export interface NetWorthEntry {
   created_at: string;
 }
 
-// ---- Reimbursements (unchanged) ----
+// ---- Reimbursements (household-scoped) ----
 
 export interface Reimbursement {
   id: string;
+  household_id: string;
   user_id: string;
   date: string;
   amount: number;
@@ -124,10 +150,11 @@ export interface Reimbursement {
   created_at: string;
 }
 
-// ---- Investments (unchanged) ----
+// ---- Investments (household-scoped) ----
 
 export interface Investment {
   id: string;
+  household_id: string;
   user_id: string;
   tier: 'growth_engine' | 'innovation_satellite' | 'stability_liquidity' | 'asymmetric_upside';
   symbol: string;
@@ -150,7 +177,6 @@ export const TIER_TARGETS: Record<Investment['tier'], number> = {
   asymmetric_upside: 0.05,
 };
 
-// Default budget categories to seed for new users
 export const DEFAULT_BUDGET_CATEGORIES = [
   { name: 'Essentials', monthly_amount: 5600 },
   { name: 'Investments', monthly_amount: 2800 },
@@ -159,7 +185,6 @@ export const DEFAULT_BUDGET_CATEGORIES = [
   { name: 'Fun', monthly_amount: 1400 },
 ];
 
-// Default accounts to seed for new users
 export const DEFAULT_ACCOUNTS = [
   'Personal Chequing',
   'Personal Savings',
@@ -169,7 +194,6 @@ export const DEFAULT_ACCOUNTS = [
   'Crypto/Kraken',
 ];
 
-// Default net worth items to seed for new users
 export const DEFAULT_NET_WORTH_ASSETS = [
   'Cash + Investments',
   'Business Assets (MMP & Frameworks)',

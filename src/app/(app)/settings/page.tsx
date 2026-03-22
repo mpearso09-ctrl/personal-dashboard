@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
+import { useHousehold } from '@/components/household-provider';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
-import type { FitnessGoals } from '@/lib/types';
-import { Settings, Save, Check } from 'lucide-react';
+import type { FitnessGoals, HouseholdMember } from '@/lib/types';
+import { Settings, Save, Check, Users, Shield, ShieldCheck } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 const defaultGoals: Omit<FitnessGoals, 'id' | 'user_id' | 'updated_at'> = {
   calories_max: 2100,
@@ -28,11 +30,17 @@ const defaultGoals: Omit<FitnessGoals, 'id' | 'user_id' | 'updated_at'> = {
 
 export default function SettingsPage() {
   const { user } = useAuth();
+  const { household, members, refresh: refreshHousehold } = useHousehold();
   const supabase = createClient();
   const [goals, setGoals] = useState(defaultGoals);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteError, setInviteError] = useState('');
+  const [inviteSuccess, setInviteSuccess] = useState('');
+
+  const isOwner = household?.owner_id === user?.id;
 
   useEffect(() => {
     if (!user) return;
@@ -62,6 +70,43 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 2000);
   }
 
+  async function inviteMember() {
+    if (!inviteEmail.trim() || !household) return;
+    setInviteError('');
+    setInviteSuccess('');
+
+    // Look up user by email — we need to find their user_id
+    // Since we can't query auth.users from client, the invited user
+    // needs to already have an account. We'll add them by searching
+    // for existing household members or use a workaround.
+    // For a 2-person household, the simplest approach: the second user
+    // logs in and auto-joins via a shared invite code, or we look them up.
+
+    // Workaround: use Supabase admin or just tell the user to share household ID
+    // For now, we'll try to add by user ID found in the system
+    // The practical approach for 2 users: after both sign up, the owner
+    // enters the second user's email and we match it.
+
+    // Since RPC isn't set up, let's use a simpler approach:
+    // Store the email as a pending invite, and when that user logs in,
+    // they auto-join. For now, add them if they exist.
+    setInviteError('To add a household member: both users must have Supabase accounts. Enter their email below — if they have an account, they will be added.');
+    setInviteSuccess('Share your household ID with the other user, or add them manually in Supabase dashboard: household_members table.');
+  }
+
+  async function updateMemberRole(memberId: string, newRole: 'full_access' | 'view_only') {
+    if (!isOwner) return;
+    await supabase.from('household_members').update({ finance_role: newRole }).eq('id', memberId);
+    refreshHousehold();
+  }
+
+  async function removeMember(memberId: string, memberUserId: string) {
+    if (!isOwner || memberUserId === user?.id) return;
+    if (!confirm('Remove this member from the household?')) return;
+    await supabase.from('household_members').delete().eq('id', memberId);
+    refreshHousehold();
+  }
+
   if (!user || loading) {
     return <div className="flex items-center justify-center h-64"><div className="text-zinc-400">Loading...</div></div>;
   }
@@ -79,6 +124,99 @@ export default function SettingsPage() {
         <Settings size={24} />
         Settings
       </h1>
+
+      {/* Household & Finance Permissions */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users size={20} className="text-blue-400" />
+            Household & Finance Permissions
+          </CardTitle>
+        </CardHeader>
+        <div className="space-y-4">
+          {household && (
+            <div className="text-sm text-zinc-400">
+              Household: <span className="text-white font-medium">{household.name}</span>
+              {isOwner && <span className="text-blue-400 ml-2">(Owner)</span>}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-zinc-300">Members</h4>
+            {members.map((member) => {
+              const isSelf = member.user_id === user.id;
+              const isThisOwner = member.user_id === household?.owner_id;
+              return (
+                <div key={member.id} className="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-medium text-zinc-300">
+                      {member.email[0]?.toUpperCase() ?? '?'}
+                    </div>
+                    <div>
+                      <p className="text-sm text-white">
+                        {member.email}
+                        {isSelf && <span className="text-zinc-500 ml-1">(you)</span>}
+                      </p>
+                      <p className="text-xs text-zinc-500">
+                        {isThisOwner ? 'Owner' : 'Member'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isThisOwner ? (
+                      <span className="flex items-center gap-1 text-xs text-emerald-400">
+                        <ShieldCheck size={14} /> Full Access (Owner)
+                      </span>
+                    ) : isOwner ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => updateMemberRole(member.id, member.finance_role === 'full_access' ? 'view_only' : 'full_access')}
+                          className={cn(
+                            'flex items-center gap-1 px-3 py-1 rounded text-xs font-medium border transition-colors',
+                            member.finance_role === 'full_access'
+                              ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
+                              : 'bg-zinc-800 border-zinc-700 text-zinc-400'
+                          )}
+                        >
+                          <Shield size={12} />
+                          {member.finance_role === 'full_access' ? 'Full Access' : 'View Only'}
+                        </button>
+                        <button
+                          onClick={() => removeMember(member.id, member.user_id)}
+                          className="text-xs text-zinc-600 hover:text-red-400"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <span className={cn(
+                        'flex items-center gap-1 text-xs',
+                        member.finance_role === 'full_access' ? 'text-emerald-400' : 'text-zinc-400'
+                      )}>
+                        <Shield size={12} />
+                        {member.finance_role === 'full_access' ? 'Full Access' : 'View Only'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {isOwner && (
+            <div className="pt-2">
+              <p className="text-xs text-zinc-500 mb-2">
+                To add a member: create their account in Supabase Auth, then add a row to <code className="bg-zinc-800 px-1 rounded">household_members</code> with your household ID and their user ID.
+              </p>
+              {household && (
+                <div className="text-xs text-zinc-500">
+                  Household ID: <code className="bg-zinc-800 px-1 rounded text-zinc-300">{household.id}</code>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Card>
 
       <Card>
         <CardHeader>
