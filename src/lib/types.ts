@@ -11,6 +11,7 @@ export interface HouseholdMember {
   id: string;
   household_id: string;
   user_id: string;
+  display_name: string | null;
   finance_role: 'full_access' | 'view_only';
   created_at: string;
 }

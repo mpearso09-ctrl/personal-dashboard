@@ -862,7 +862,7 @@ export default function FitnessPage() {
             >
               {householdUsers.map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.id === user!.id ? 'My Data' : u.email}
+                  {u.id === user!.id ? 'My Data' : u.displayName}
                 </option>
               ))}
             </select>
@@ -872,7 +872,7 @@ export default function FitnessPage() {
 
       {isViewingOther && (
         <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm">
-          Viewing read-only — this is {householdUsers.find(u => u.id === viewingUserId)?.email}&apos;s data
+          Viewing read-only — this is {householdUsers.find(u => u.id === viewingUserId)?.displayName}&apos;s data
         </div>
       )}
 

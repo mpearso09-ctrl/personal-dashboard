@@ -150,11 +150,11 @@ export default function SettingsPage() {
                 <div key={member.id} className="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-medium text-zinc-300">
-                      {member.email[0]?.toUpperCase() ?? '?'}
+                      {(member.display_name ?? '?')[0]?.toUpperCase()}
                     </div>
                     <div>
                       <p className="text-sm text-white">
-                        {member.email}
+                        {member.display_name ?? member.user_id.slice(0, 8)}
                         {isSelf && <span className="text-zinc-500 ml-1">(you)</span>}
                       </p>
                       <p className="text-xs text-zinc-500">

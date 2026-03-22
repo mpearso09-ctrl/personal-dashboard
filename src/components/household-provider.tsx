@@ -5,14 +5,15 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from './auth-provider';
 import type { Household, HouseholdMember } from '@/lib/types';
 
-interface HouseholdUser {
+export interface HouseholdUser {
   id: string;
+  displayName: string;
   email: string;
 }
 
 interface HouseholdContext {
   household: Household | null;
-  members: (HouseholdMember & { email: string })[];
+  members: HouseholdMember[];
   householdId: string | null;
   financeRole: 'full_access' | 'view_only';
   canEditFinances: boolean;
@@ -41,19 +42,17 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
 
   const [household, setHousehold] = useState<Household | null>(null);
-  const [members, setMembers] = useState<(HouseholdMember & { email: string })[]>([]);
+  const [members, setMembers] = useState<HouseholdMember[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!user) { setLoading(false); return; }
 
-    // First check if user owns a household (avoids RLS issues on household_members)
     const { data: ownedHouseholds } = await supabase
       .from('households')
       .select('*')
       .eq('owner_id', user.id);
 
-    // Also check memberships
     const { data: memberRows } = await supabase
       .from('household_members')
       .select('*, households(*)')
@@ -64,39 +63,24 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       const hh = membership.households as unknown as Household;
       setHousehold(hh);
 
-      // Load all members of this household
       const { data: allMembers } = await supabase
         .from('household_members')
         .select('*')
         .eq('household_id', hh.id);
 
-      if (allMembers) {
-        // Get emails for each member via auth admin or just store what we know
-        // Since we can't query auth.users directly, we'll get user info another way
-        // For now, we'll use the user_id and email mapping from auth state
-        const membersWithEmail = await Promise.all(
-          allMembers.map(async (m) => {
-            // We know our own email
-            if (m.user_id === user.id) {
-              return { ...m, email: user.email ?? 'Unknown' };
-            }
-            // For other members, we store a simple lookup
-            // In practice, you'd have a profiles table, but we'll use a workaround
-            return { ...m, email: m.user_id.slice(0, 8) + '...' };
-          })
-        );
-        setMembers(membersWithEmail);
-      }
+      setMembers(allMembers ?? []);
     } else if (ownedHouseholds && ownedHouseholds.length > 0) {
-      // User owns a household but isn't in household_members yet (edge case)
       const hh = ownedHouseholds[0];
       setHousehold(hh);
       await supabase
         .from('household_members')
-        .upsert({ household_id: hh.id, user_id: user.id, finance_role: 'full_access' }, { onConflict: 'household_id,user_id' });
-      setMembers([{ id: '', household_id: hh.id, user_id: user.id, finance_role: 'full_access', created_at: '', email: user.email ?? '' }]);
+        .upsert({ household_id: hh.id, user_id: user.id, finance_role: 'full_access', display_name: user.email?.split('@')[0] ?? null }, { onConflict: 'household_id,user_id' });
+      const { data: allMembers } = await supabase
+        .from('household_members')
+        .select('*')
+        .eq('household_id', hh.id);
+      setMembers(allMembers ?? []);
     } else {
-      // No household yet — auto-create one
       const { data: newHH, error: hhError } = await supabase
         .from('households')
         .insert({ name: 'My Household', owner_id: user.id })
@@ -110,16 +94,16 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (newHH) {
-        const { error: memError } = await supabase
+        await supabase
           .from('household_members')
-          .insert({ household_id: newHH.id, user_id: user.id, finance_role: 'full_access' });
-
-        if (memError) {
-          console.error('Failed to add member:', memError);
-        }
+          .insert({ household_id: newHH.id, user_id: user.id, finance_role: 'full_access', display_name: user.email?.split('@')[0] ?? null });
 
         setHousehold(newHH);
-        setMembers([{ id: '', household_id: newHH.id, user_id: user.id, finance_role: 'full_access', created_at: '', email: user.email ?? '' }]);
+        const { data: allMembers } = await supabase
+          .from('household_members')
+          .select('*')
+          .eq('household_id', newHH.id);
+        setMembers(allMembers ?? []);
       }
     }
 
@@ -134,7 +118,8 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
 
   const householdUsers: HouseholdUser[] = members.map((m) => ({
     id: m.user_id,
-    email: m.email,
+    displayName: m.display_name ?? m.user_id.slice(0, 8),
+    email: m.user_id === user?.id ? (user.email ?? '') : (m.display_name ?? m.user_id.slice(0, 8)),
   }));
 
   return (
