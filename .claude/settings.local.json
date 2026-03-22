@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(npx create-next-app@latest personal-dashboard --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(npx create-next-app@latest personal-dashboard --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm --turbopack)",
+      "Bash(printf 'n\\\\nn\\\\n')",
+      "Bash(yes n:*)",
+      "Bash(shopt -s dotglob)",
+      "Bash(mv personal-dashboard/* .)",
+      "Bash(mv personal-dashboard/.* .)",
+      "Bash(rmdir personal-dashboard:*)",
+      "Bash(npm install:*)",
+      "Bash(rm -rf dashboard fitness finances settings)",
+      "Bash(mkdir -p \"\\(app\\)/dashboard\" \"\\(app\\)/fitness\" \"\\(app\\)/finances\" \"\\(app\\)/settings\")",
+      "Bash(wc -l \"C:/Projects/Personal Dashboard/src/app/\\(app\\)/fitness/page.tsx\")",
+      "Bash(wc -l \"C:/Projects/Personal Dashboard/src/app/\\(app\\)/finances/page.tsx\")",
+      "Bash(npx next:*)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}
