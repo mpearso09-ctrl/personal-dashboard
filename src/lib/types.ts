@@ -13,6 +13,8 @@ export interface FitnessDaily {
   workout: boolean;
   training_quality: number | null;
   mobility: boolean;
+  weight_lbs: number | null;
+  body_fat_pct: number | null;
   notes: string | null;
   created_at: string;
 }
@@ -49,36 +51,67 @@ export interface FitnessGoals {
   updated_at: string;
 }
 
-export interface BudgetWeekly {
+// ---- Budget (dynamic categories) ----
+
+export interface BudgetCategory {
   id: string;
   user_id: string;
-  week_start: string;
-  essentials: number;
-  investments: number;
-  savings: number;
-  debt: number;
-  fun: number;
-  money_in: number;
-  amex_balance: number | null;
+  name: string;
+  monthly_amount: number;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface BudgetDailyEntry {
+  id: string;
+  user_id: string;
+  date: string;
+  category_id: string;
+  amount: number;
   notes: string | null;
   created_at: string;
 }
 
-export interface CashflowDaily {
+// ---- Cash Flow (dynamic accounts, daily balances) ----
+
+export interface Account {
   id: string;
   user_id: string;
-  date: string;
-  personal_in: number;
-  personal_out: number;
-  savings_in: number;
-  savings_out: number;
-  frameworks_in: number;
-  frameworks_out: number;
-  frameworks_savings_in: number;
-  frameworks_savings_out: number;
-  notes: string | null;
+  name: string;
+  sort_order: number;
   created_at: string;
 }
+
+export interface AccountBalance {
+  id: string;
+  user_id: string;
+  account_id: string;
+  date: string;
+  balance: number;
+  created_at: string;
+}
+
+// ---- Net Worth (dynamic items) ----
+
+export interface NetWorthItem {
+  id: string;
+  user_id: string;
+  type: 'asset' | 'liability';
+  name: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface NetWorthEntry {
+  id: string;
+  user_id: string;
+  item_id: string;
+  month: string;
+  value: number;
+  created_at: string;
+}
+
+// ---- Reimbursements (unchanged) ----
 
 export interface Reimbursement {
   id: string;
@@ -91,22 +124,7 @@ export interface Reimbursement {
   created_at: string;
 }
 
-export interface NetWorthMonthly {
-  id: string;
-  user_id: string;
-  month: string;
-  rbc_balance: number;
-  triangle_balance: number;
-  scotia_visa: number;
-  scotia_loc: number;
-  td_loan_tesla: number;
-  taxes_owed: number;
-  cash_investments: number;
-  business_assets: number;
-  protocase_shares: number;
-  vehicle_assets: number;
-  created_at: string;
-}
+// ---- Investments (unchanged) ----
 
 export interface Investment {
   id: string;
@@ -117,14 +135,6 @@ export interface Investment {
   target_pct: number;
   last_updated: string;
 }
-
-export const BUDGET_TARGETS = {
-  essentials: { monthly: 5600, weekly: 1400 },
-  investments: { monthly: 2800, weekly: 700 },
-  savings: { monthly: 700, weekly: 175 },
-  debt: { monthly: 3500, weekly: 875 },
-  fun: { monthly: 1400, weekly: 350 },
-} as const;
 
 export const TIER_LABELS: Record<Investment['tier'], string> = {
   growth_engine: 'Growth Engine (55%)',
@@ -139,3 +149,39 @@ export const TIER_TARGETS: Record<Investment['tier'], number> = {
   stability_liquidity: 0.25,
   asymmetric_upside: 0.05,
 };
+
+// Default budget categories to seed for new users
+export const DEFAULT_BUDGET_CATEGORIES = [
+  { name: 'Essentials', monthly_amount: 5600 },
+  { name: 'Investments', monthly_amount: 2800 },
+  { name: 'Savings', monthly_amount: 700 },
+  { name: 'Debt', monthly_amount: 3500 },
+  { name: 'Fun', monthly_amount: 1400 },
+];
+
+// Default accounts to seed for new users
+export const DEFAULT_ACCOUNTS = [
+  'Personal Chequing',
+  'Personal Savings',
+  'Frameworks Chequing',
+  'Frameworks Savings',
+  'I-Trade Investments',
+  'Crypto/Kraken',
+];
+
+// Default net worth items to seed for new users
+export const DEFAULT_NET_WORTH_ASSETS = [
+  'Cash + Investments',
+  'Business Assets (MMP & Frameworks)',
+  'Protocase Shares (110,000 shares)',
+  'Vehicles',
+];
+
+export const DEFAULT_NET_WORTH_LIABILITIES = [
+  'RBC Credit Card',
+  'Triangle Credit Card',
+  'Scotia Visa',
+  'Scotia LOC',
+  'TD Loan (Tesla)',
+  'CRA Taxes Owed',
+];

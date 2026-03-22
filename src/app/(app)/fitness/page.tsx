@@ -9,7 +9,7 @@ import { useAuth } from '@/components/auth-provider';
 import {
   Dumbbell, Footprints, Moon, Flame, Beef, Wheat, Droplets, Salad,
   Save, Check, X, ChevronLeft, ChevronRight, Calendar, Weight,
-  TrendingUp, Activity, Target, ClipboardList, BarChart3
+  TrendingUp, Activity, Target, ClipboardList, BarChart3, Camera,
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -60,17 +60,6 @@ function shiftDate(date: string, days: number): string {
   return d.toISOString().split('T')[0];
 }
 
-function getLast30Days(): string[] {
-  const days: string[] = [];
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  for (let i = 0; i < 30; i++) {
-    days.push(d.toISOString().split('T')[0]);
-    d.setDate(d.getDate() - 1);
-  }
-  return days.reverse();
-}
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -79,7 +68,7 @@ type TabKey = 'today' | 'weekly' | 'history' | 'trends';
 
 const tabs: { key: TabKey; label: string; icon: typeof Dumbbell }[] = [
   { key: 'today', label: 'Today', icon: ClipboardList },
-  { key: 'weekly', label: 'Weekly', icon: Weight },
+  { key: 'weekly', label: 'Weekly Photos', icon: Camera },
   { key: 'history', label: 'History', icon: Calendar },
   { key: 'trends', label: 'Trends', icon: BarChart3 },
 ];
@@ -102,6 +91,8 @@ export default function FitnessPage() {
     mobility: false,
     training_quality: null,
     notes: '',
+    weight_lbs: null,
+    body_fat_pct: null,
   });
 
   // --- weekly tab ---
@@ -110,8 +101,6 @@ export default function FitnessPage() {
     return mondays[0];
   });
   const [weeklyForm, setWeeklyForm] = useState<Partial<FitnessWeekly>>({
-    weight_lbs: null,
-    body_fat_pct: null,
     photo_taken: false,
   });
 
@@ -119,7 +108,8 @@ export default function FitnessPage() {
   const [historyEntries, setHistoryEntries] = useState<FitnessDaily[]>([]);
 
   // --- trends tab ---
-  const [weightTrend, setWeightTrend] = useState<FitnessWeekly[]>([]);
+  const [weightTrend, setWeightTrend] = useState<{ date: string; weight_lbs: number }[]>([]);
+  const [bodyFatTrend, setBodyFatTrend] = useState<{ date: string; body_fat_pct: number }[]>([]);
   const [last30Daily, setLast30Daily] = useState<FitnessDaily[]>([]);
 
   // =========================================================================
@@ -147,7 +137,7 @@ export default function FitnessPage() {
     if (data) {
       setDailyForm(data as FitnessDaily);
     } else {
-      setDailyForm({ workout: false, mobility: false, training_quality: null, notes: '' });
+      setDailyForm({ workout: false, mobility: false, training_quality: null, notes: '', weight_lbs: null, body_fat_pct: null });
     }
   }, [user, selectedDate]);
 
@@ -162,7 +152,7 @@ export default function FitnessPage() {
     if (data) {
       setWeeklyForm(data as FitnessWeekly);
     } else {
-      setWeeklyForm({ weight_lbs: null, body_fat_pct: null, photo_taken: false });
+      setWeeklyForm({ photo_taken: false });
     }
   }, [user, weeklyDate]);
 
@@ -179,14 +169,24 @@ export default function FitnessPage() {
 
   const fetchTrends = useCallback(async () => {
     if (!user) return;
-    // Weight trend: last 20 weekly entries
+
+    // Weight trend from daily entries where weight_lbs is not null
     const { data: wData } = await supabase
-      .from('fitness_weekly')
-      .select('*')
+      .from('fitness_daily')
+      .select('date, weight_lbs')
       .eq('user_id', user.id)
-      .order('date', { ascending: true })
-      .limit(20);
-    if (wData) setWeightTrend(wData as FitnessWeekly[]);
+      .not('weight_lbs', 'is', null)
+      .order('date');
+    if (wData) setWeightTrend(wData as { date: string; weight_lbs: number }[]);
+
+    // Body fat trend from daily entries where body_fat_pct is not null
+    const { data: bfData } = await supabase
+      .from('fitness_daily')
+      .select('date, body_fat_pct')
+      .eq('user_id', user.id)
+      .not('body_fat_pct', 'is', null)
+      .order('date');
+    if (bfData) setBodyFatTrend(bfData as { date: string; body_fat_pct: number }[]);
 
     // Last 30 days of daily entries
     const thirtyAgo = shiftDate(getToday(), -30);
@@ -225,9 +225,7 @@ export default function FitnessPage() {
 
   useEffect(() => {
     if (!user) return;
-    if (activeTab === 'trends') {
-      fetchTrends();
-    }
+    if (activeTab === 'trends') fetchTrends();
   }, [user, activeTab, fetchTrends]);
 
   // =========================================================================
@@ -259,6 +257,12 @@ export default function FitnessPage() {
         : Number(dailyForm.training_quality);
     payload.notes = dailyForm.notes || null;
 
+    // Weight and body fat now live on fitness_daily
+    const weightVal = dailyForm.weight_lbs;
+    const bfVal = dailyForm.body_fat_pct;
+    payload.weight_lbs = weightVal === null || weightVal === undefined || weightVal === ('' as unknown) ? null : Number(weightVal);
+    payload.body_fat_pct = bfVal === null || bfVal === undefined || bfVal === ('' as unknown) ? null : Number(bfVal);
+
     const { error } = await supabase
       .from('fitness_daily')
       .upsert(payload, { onConflict: 'user_id,date' });
@@ -273,8 +277,6 @@ export default function FitnessPage() {
     const payload = {
       user_id: user.id,
       date: weeklyDate,
-      weight_lbs: weeklyForm.weight_lbs === null || weeklyForm.weight_lbs === undefined ? null : Number(weeklyForm.weight_lbs),
-      body_fat_pct: weeklyForm.body_fat_pct === null || weeklyForm.body_fat_pct === undefined ? null : Number(weeklyForm.body_fat_pct),
       photo_taken: !!weeklyForm.photo_taken,
     };
     const { error } = await supabase
@@ -387,11 +389,56 @@ export default function FitnessPage() {
         </button>
       </div>
 
-      {/* Numeric fields */}
       <Card>
         <CardHeader>
           <CardTitle>Daily Entry &mdash; {formatDate(selectedDate)}</CardTitle>
         </CardHeader>
+
+        {/* Weight & Body Fat (optional, at the top) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-sm text-zinc-400">
+              <Weight className="h-4 w-4" />
+              Weight (lbs)
+              {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_weight})</span>}
+            </label>
+            <input
+              type="number"
+              step="0.1"
+              value={dailyForm.weight_lbs ?? ''}
+              onChange={(e) =>
+                setDailyForm((prev) => ({
+                  ...prev,
+                  weight_lbs: e.target.value === '' ? null : Number(e.target.value),
+                }))
+              }
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white"
+              placeholder="— (optional)"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-sm text-zinc-400">
+              <TrendingUp className="h-4 w-4" />
+              Body Fat %
+              {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_body_fat}%)</span>}
+            </label>
+            <input
+              type="number"
+              step="0.1"
+              value={dailyForm.body_fat_pct ?? ''}
+              onChange={(e) =>
+                setDailyForm((prev) => ({
+                  ...prev,
+                  body_fat_pct: e.target.value === '' ? null : Number(e.target.value),
+                }))
+              }
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white"
+              placeholder="— (optional)"
+            />
+          </div>
+        </div>
+
+        {/* Numeric fields */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {dailyFields.map((f) => {
             const val = (dailyForm as Record<string, unknown>)[f.name] as number | null;
@@ -520,7 +567,7 @@ export default function FitnessPage() {
       <div className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>Weekly Weigh-In</CardTitle>
+            <CardTitle>Weekly Progress Photo</CardTitle>
           </CardHeader>
 
           {/* Monday selector */}
@@ -539,51 +586,8 @@ export default function FitnessPage() {
             </select>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 text-sm text-zinc-400">
-                <Weight className="h-4 w-4" />
-                Weight (lbs)
-                {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_weight})</span>}
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                value={weeklyForm.weight_lbs ?? ''}
-                onChange={(e) =>
-                  setWeeklyForm((prev) => ({
-                    ...prev,
-                    weight_lbs: e.target.value === '' ? null : Number(e.target.value),
-                  }))
-                }
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white"
-                placeholder="—"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 text-sm text-zinc-400">
-                <TrendingUp className="h-4 w-4" />
-                Body Fat %
-                {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_body_fat}%)</span>}
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                value={weeklyForm.body_fat_pct ?? ''}
-                onChange={(e) =>
-                  setWeeklyForm((prev) => ({
-                    ...prev,
-                    body_fat_pct: e.target.value === '' ? null : Number(e.target.value),
-                  }))
-                }
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white"
-                placeholder="—"
-              />
-            </div>
-          </div>
-
           {/* Photo taken toggle */}
-          <div className="mt-4">
+          <div>
             <button
               onClick={() => setWeeklyForm((prev) => ({ ...prev, photo_taken: !prev.photo_taken }))}
               className={cn(
@@ -598,6 +602,10 @@ export default function FitnessPage() {
             </button>
           </div>
 
+          <p className="mt-4 text-xs text-zinc-500">
+            Track whether you took your weekly progress photo. Weight and body fat are now logged in the daily entry.
+          </p>
+
           {/* Save */}
           <div className="mt-6 flex items-center gap-3">
             <button
@@ -606,7 +614,7 @@ export default function FitnessPage() {
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
             >
               <Save className="h-4 w-4" />
-              {saving ? 'Saving...' : 'Save Weigh-In'}
+              {saving ? 'Saving...' : 'Save'}
             </button>
             {saveMessage && (
               <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
@@ -629,6 +637,8 @@ export default function FitnessPage() {
           <thead>
             <tr className="text-zinc-400 border-b border-zinc-800">
               <th className="text-left py-2 px-2">Date</th>
+              <th className="text-right py-2 px-2">Weight</th>
+              <th className="text-right py-2 px-2">BF%</th>
               <th className="text-right py-2 px-2">Cals</th>
               <th className="text-right py-2 px-2">Protein</th>
               <th className="text-right py-2 px-2">Steps</th>
@@ -641,6 +651,12 @@ export default function FitnessPage() {
             {historyEntries.map((entry) => (
               <tr key={entry.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
                 <td className="py-2 px-2 text-zinc-300">{formatDate(entry.date)}</td>
+                <td className="text-right py-2 px-2 text-zinc-300">
+                  {entry.weight_lbs ?? '—'}
+                </td>
+                <td className="text-right py-2 px-2 text-zinc-300">
+                  {entry.body_fat_pct != null ? `${entry.body_fat_pct}%` : '—'}
+                </td>
                 <td className={cn('text-right py-2 px-2', getStatusColor(entry.calories_consumed, undefined, goalValue('calories_max')))}>
                   {entry.calories_consumed ?? '—'}
                 </td>
@@ -667,7 +683,7 @@ export default function FitnessPage() {
             ))}
             {historyEntries.length === 0 && (
               <tr>
-                <td colSpan={7} className="text-center text-zinc-500 py-8">
+                <td colSpan={9} className="text-center text-zinc-500 py-8">
                   No entries yet.
                 </td>
               </tr>
@@ -681,13 +697,15 @@ export default function FitnessPage() {
   const renderTrendsTab = () => {
     const scorecard = buildScorecard();
 
-    const weightData = weightTrend
-      .filter((w) => w.weight_lbs !== null)
-      .map((w) => ({ date: formatDate(w.date), weight: w.weight_lbs }));
+    const weightData = weightTrend.map((w) => ({
+      date: formatDate(w.date),
+      weight: w.weight_lbs,
+    }));
 
-    const bfData = weightTrend
-      .filter((w) => w.body_fat_pct !== null)
-      .map((w) => ({ date: formatDate(w.date), bf: w.body_fat_pct }));
+    const bfData = bodyFatTrend.map((w) => ({
+      date: formatDate(w.date),
+      bf: w.body_fat_pct,
+    }));
 
     const deficitData = last30Daily.map((d) => ({
       date: formatDate(d.date),

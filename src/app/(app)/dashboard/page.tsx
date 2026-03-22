@@ -5,9 +5,13 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, getToday, getWeekStart, getDayOfChallenge, getStatusColor, cn } from '@/lib/utils';
-import type { FitnessDaily, FitnessGoals, BudgetWeekly, NetWorthMonthly } from '@/lib/types';
-import { BUDGET_TARGETS } from '@/lib/types';
-import { Dumbbell, DollarSign, TrendingUp, Target, Flame, Footprints, Moon, Zap } from 'lucide-react';
+import type { FitnessDaily, FitnessGoals, BudgetCategory, BudgetDailyEntry, NetWorthItem, NetWorthEntry } from '@/lib/types';
+import { Dumbbell, DollarSign, TrendingUp, Target, Flame, Footprints, Moon, Scale } from 'lucide-react';
+
+interface WeekBudgetSummary {
+  category: BudgetCategory;
+  spent: number;
+}
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -15,8 +19,8 @@ export default function DashboardPage() {
 
   const [todayEntry, setTodayEntry] = useState<FitnessDaily | null>(null);
   const [goals, setGoals] = useState<FitnessGoals | null>(null);
-  const [weekBudget, setWeekBudget] = useState<BudgetWeekly | null>(null);
-  const [latestNetWorth, setLatestNetWorth] = useState<NetWorthMonthly | null>(null);
+  const [weekBudgetSummary, setWeekBudgetSummary] = useState<WeekBudgetSummary[]>([]);
+  const [netWorthData, setNetWorthData] = useState<{ totalAssets: number; totalLiabilities: number } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -26,17 +30,47 @@ export default function DashboardPage() {
       const today = getToday();
       const weekStart = getWeekStart(today);
 
-      const [fitRes, goalRes, budgetRes, nwRes] = await Promise.all([
+      // Get Sunday end of week
+      const weekEnd = new Date(weekStart + 'T00:00:00');
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      const weekEndStr = weekEnd.toISOString().split('T')[0];
+
+      const [fitRes, goalRes, catsRes, weekEntriesRes, nwItemsRes, nwEntriesRes] = await Promise.all([
         supabase.from('fitness_daily').select('*').eq('user_id', user!.id).eq('date', today).maybeSingle(),
         supabase.from('fitness_goals').select('*').eq('user_id', user!.id).maybeSingle(),
-        supabase.from('budget_weekly').select('*').eq('user_id', user!.id).eq('week_start', weekStart).maybeSingle(),
-        supabase.from('net_worth_monthly').select('*').eq('user_id', user!.id).order('month', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('budget_categories').select('*').eq('user_id', user!.id).order('sort_order'),
+        supabase.from('budget_daily').select('*').eq('user_id', user!.id).gte('date', weekStart).lte('date', weekEndStr),
+        supabase.from('net_worth_items').select('*').eq('user_id', user!.id),
+        supabase.from('net_worth_entries').select('*, net_worth_items(type)').eq('user_id', user!.id).order('month', { ascending: false }),
       ]);
 
       setTodayEntry(fitRes.data);
       setGoals(goalRes.data);
-      setWeekBudget(budgetRes.data);
-      setLatestNetWorth(nwRes.data);
+
+      // Build weekly budget summary
+      const cats: BudgetCategory[] = catsRes.data ?? [];
+      const weekEntries: BudgetDailyEntry[] = weekEntriesRes.data ?? [];
+      const summary = cats.map((cat) => ({
+        category: cat,
+        spent: weekEntries.filter((e) => e.category_id === cat.id).reduce((sum, e) => sum + Number(e.amount), 0),
+      }));
+      setWeekBudgetSummary(summary);
+
+      // Build net worth from latest month's entries
+      const nwItems: NetWorthItem[] = nwItemsRes.data ?? [];
+      const allEntries: (NetWorthEntry & { net_worth_items: { type: string } })[] = nwEntriesRes.data ?? [];
+      if (allEntries.length > 0) {
+        const latestMonth = allEntries[0].month;
+        const latestEntries = allEntries.filter((e) => e.month === latestMonth);
+        const totalAssets = latestEntries
+          .filter((e) => e.net_worth_items?.type === 'asset')
+          .reduce((sum, e) => sum + Number(e.value), 0);
+        const totalLiabilities = latestEntries
+          .filter((e) => e.net_worth_items?.type === 'liability')
+          .reduce((sum, e) => sum + Number(e.value), 0);
+        setNetWorthData({ totalAssets, totalLiabilities });
+      }
+
       setLoading(false);
     }
 
@@ -52,28 +86,16 @@ export default function DashboardPage() {
   }
 
   const challengeDay = goals ? getDayOfChallenge(goals.challenge_start_date) : null;
-
-  // Net worth calculation
-  const totalAssets = latestNetWorth
-    ? (latestNetWorth.cash_investments + latestNetWorth.business_assets + latestNetWorth.protocase_shares + latestNetWorth.vehicle_assets)
-    : 0;
-  const totalLiabilities = latestNetWorth
-    ? (latestNetWorth.rbc_balance + latestNetWorth.triangle_balance + latestNetWorth.scotia_visa + latestNetWorth.scotia_loc + latestNetWorth.td_loan_tesla + latestNetWorth.taxes_owed)
-    : 0;
-  const netWorth = totalAssets - totalLiabilities;
-
-  // Budget totals
-  const weeklySpent = weekBudget
-    ? weekBudget.essentials + weekBudget.investments + weekBudget.savings + weekBudget.debt + weekBudget.fun
-    : 0;
-  const weeklyBudget = BUDGET_TARGETS.essentials.weekly + BUDGET_TARGETS.investments.weekly + BUDGET_TARGETS.savings.weekly + BUDGET_TARGETS.debt.weekly + BUDGET_TARGETS.fun.weekly;
+  const netWorth = netWorthData ? netWorthData.totalAssets - netWorthData.totalLiabilities : 0;
+  const totalWeeklyBudget = weekBudgetSummary.reduce((sum, s) => sum + s.category.monthly_amount / 4.333, 0);
+  const totalWeeklySpent = weekBudgetSummary.reduce((sum, s) => sum + s.spent, 0);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-white">Dashboard</h1>
         {challengeDay && goals && (
-          <div className="bg-blue-600/20 text-blue-400 px-4 py-2 rounded-lg font-medium">
+          <div className="bg-blue-600/20 text-blue-400 px-4 py-2 rounded-lg font-medium text-sm">
             {goals.challenge_name}: Day {Math.min(challengeDay, goals.challenge_days)} of {goals.challenge_days}
           </div>
         )}
@@ -122,14 +144,18 @@ export default function DashboardPage() {
           </CardHeader>
           {todayEntry ? (
             <div className="space-y-3">
+              {todayEntry.weight_lbs && (
+                <MetricRow label="Weight" value={`${todayEntry.weight_lbs} lbs`} icon={<Scale size={14} />} />
+              )}
+              {todayEntry.body_fat_pct && (
+                <MetricRow label="Body Fat" value={`${todayEntry.body_fat_pct}%`} />
+              )}
               <MetricRow label="Calories Burned" value={todayEntry.calories_burned?.toLocaleString() ?? '—'} color={goals ? getStatusColor(todayEntry.calories_burned, goals.calories_burned_min) : undefined} />
               <MetricRow label="Carbs" value={todayEntry.carbs_g ? `${todayEntry.carbs_g}g` : '—'} color={goals ? getStatusColor(todayEntry.carbs_g, goals.carbs_min, goals.carbs_max) : undefined} />
               <MetricRow label="Fat" value={todayEntry.fat_g ? `${todayEntry.fat_g}g` : '—'} color={goals ? getStatusColor(todayEntry.fat_g, goals.fat_min, goals.fat_max) : undefined} />
               <MetricRow label="Fiber" value={todayEntry.fiber_g ? `${todayEntry.fiber_g}g` : '—'} color={goals ? getStatusColor(todayEntry.fiber_g, goals.fiber_min, goals.fiber_max) : undefined} />
               <MetricRow label="Workout" value={todayEntry.workout ? 'Yes' : 'No'} color={todayEntry.workout ? 'text-emerald-400' : 'text-zinc-400'} />
-              <MetricRow label="Training Quality" value={todayEntry.training_quality?.toString() ?? '—'} />
               <MetricRow label="Mobility" value={todayEntry.mobility ? 'Done' : 'Not yet'} color={todayEntry.mobility ? 'text-emerald-400' : 'text-zinc-400'} />
-              {todayEntry.notes && <p className="text-sm text-zinc-400 pt-2 border-t border-zinc-800">{todayEntry.notes}</p>}
             </div>
           ) : (
             <p className="text-zinc-500 text-sm">No entry yet today. <a href="/fitness" className="text-blue-400 hover:underline">Log now</a></p>
@@ -144,22 +170,25 @@ export default function DashboardPage() {
               This Week&apos;s Budget
             </CardTitle>
           </CardHeader>
-          {weekBudget ? (
+          {weekBudgetSummary.length > 0 ? (
             <div className="space-y-3">
-              <BudgetRow label="Essentials" actual={weekBudget.essentials} target={BUDGET_TARGETS.essentials.weekly} />
-              <BudgetRow label="Investments" actual={weekBudget.investments} target={BUDGET_TARGETS.investments.weekly} />
-              <BudgetRow label="Savings" actual={weekBudget.savings} target={BUDGET_TARGETS.savings.weekly} />
-              <BudgetRow label="Debt" actual={weekBudget.debt} target={BUDGET_TARGETS.debt.weekly} />
-              <BudgetRow label="Fun" actual={weekBudget.fun} target={BUDGET_TARGETS.fun.weekly} />
+              {weekBudgetSummary.map((s) => (
+                <BudgetRow
+                  key={s.category.id}
+                  label={s.category.name}
+                  actual={s.spent}
+                  target={Math.round(s.category.monthly_amount / 4.333)}
+                />
+              ))}
               <div className="pt-3 border-t border-zinc-800 flex justify-between font-medium">
                 <span className="text-zinc-300">Total</span>
-                <span className={cn(weeklySpent <= weeklyBudget ? 'text-emerald-400' : 'text-red-400')}>
-                  {formatCurrency(weeklySpent)} / {formatCurrency(weeklyBudget)}
+                <span className={cn(totalWeeklySpent <= totalWeeklyBudget ? 'text-emerald-400' : 'text-red-400')}>
+                  {formatCurrency(totalWeeklySpent)} / {formatCurrency(Math.round(totalWeeklyBudget))}
                 </span>
               </div>
             </div>
           ) : (
-            <p className="text-zinc-500 text-sm">No budget entry this week. <a href="/finances" className="text-blue-400 hover:underline">Enter now</a></p>
+            <p className="text-zinc-500 text-sm">No budget categories set up. <a href="/finances" className="text-blue-400 hover:underline">Set up now</a></p>
           )}
         </Card>
 
@@ -171,15 +200,15 @@ export default function DashboardPage() {
               Net Worth
             </CardTitle>
           </CardHeader>
-          {latestNetWorth ? (
+          {netWorthData ? (
             <div className="grid grid-cols-3 gap-6">
               <div className="text-center">
                 <p className="text-sm text-zinc-400">Total Assets</p>
-                <p className="text-xl font-bold text-emerald-400">{formatCurrency(totalAssets)}</p>
+                <p className="text-xl font-bold text-emerald-400">{formatCurrency(netWorthData.totalAssets)}</p>
               </div>
               <div className="text-center">
                 <p className="text-sm text-zinc-400">Total Liabilities</p>
-                <p className="text-xl font-bold text-red-400">{formatCurrency(totalLiabilities)}</p>
+                <p className="text-xl font-bold text-red-400">{formatCurrency(netWorthData.totalLiabilities)}</p>
               </div>
               <div className="text-center">
                 <p className="text-sm text-zinc-400">Net Worth</p>
@@ -222,10 +251,10 @@ function QuickStat({
   );
 }
 
-function MetricRow({ label, value, color }: { label: string; value: string; color?: string }) {
+function MetricRow({ label, value, color, icon }: { label: string; value: string; color?: string; icon?: React.ReactNode }) {
   return (
     <div className="flex justify-between items-center">
-      <span className="text-sm text-zinc-400">{label}</span>
+      <span className="text-sm text-zinc-400 flex items-center gap-1.5">{icon}{label}</span>
       <span className={cn('text-sm font-medium', color || 'text-white')}>{value}</span>
     </div>
   );

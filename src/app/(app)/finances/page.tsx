@@ -13,14 +13,26 @@ import {
   cn,
 } from '@/lib/utils';
 import type {
-  BudgetWeekly,
-  CashflowDaily,
+  BudgetCategory,
+  BudgetDailyEntry,
+  Account,
+  AccountBalance,
+  NetWorthItem,
+  NetWorthEntry,
   Reimbursement,
-  NetWorthMonthly,
   Investment,
 } from '@/lib/types';
-import { BUDGET_TARGETS, TIER_LABELS, TIER_TARGETS } from '@/lib/types';
 import {
+  TIER_LABELS,
+  TIER_TARGETS,
+  DEFAULT_BUDGET_CATEGORIES,
+  DEFAULT_ACCOUNTS,
+  DEFAULT_NET_WORTH_ASSETS,
+  DEFAULT_NET_WORTH_LIABILITIES,
+} from '@/lib/types';
+import {
+  BarChart,
+  Bar,
   PieChart,
   Pie,
   Cell,
@@ -43,6 +55,8 @@ import {
   Check,
   X,
   Loader2,
+  Trash2,
+  Settings,
 } from 'lucide-react';
 
 const TABS = ['Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Investments'] as const;
@@ -147,6 +161,34 @@ function SaveButton({ saving, onClick }: { saving: boolean; onClick: () => void 
   );
 }
 
+// ─── Date helpers ────────────────────────────────────────────────────────────
+
+function getMonthStart(date: string): string {
+  return date.slice(0, 7) + '-01';
+}
+
+function getMonthEnd(date: string): string {
+  const d = new Date(date + 'T00:00:00');
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return last.toISOString().split('T')[0];
+}
+
+function getWeekEnd(weekStart: string): string {
+  const d = new Date(weekStart + 'T00:00:00');
+  d.setDate(d.getDate() + 6);
+  return d.toISOString().split('T')[0];
+}
+
+function getDaysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+}
+
+function getYesterday(): string {
+  return getDaysAgo(1);
+}
+
 // ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function FinancesPage() {
@@ -205,229 +247,476 @@ export default function FinancesPage() {
 function BudgetTab({ userId }: { userId: string }) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
-  const [budgets, setBudgets] = useState<BudgetWeekly[]>([]);
-  const [form, setForm] = useState({
-    week_start: getWeekStart(getToday()),
-    essentials: 0,
-    investments: 0,
-    savings: 0,
-    debt: 0,
-    fun: 0,
-    money_in: 0,
-    amex_balance: 0,
-    notes: '',
-  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [categories, setCategories] = useState<BudgetCategory[]>([]);
+  const [entries, setEntries] = useState<BudgetDailyEntry[]>([]);
+  const [weekEntries, setWeekEntries] = useState<BudgetDailyEntry[]>([]);
+  const [monthEntries, setMonthEntries] = useState<BudgetDailyEntry[]>([]);
+  const [trendData, setTrendData] = useState<{ date: string; total: number }[]>([]);
+  const [date, setDate] = useState(getToday());
+  const [amounts, setAmounts] = useState<Record<string, number>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatAmount, setNewCatAmount] = useState(0);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  const loadBudgets = useCallback(async () => {
+  const loadCategories = useCallback(async () => {
     const { data } = await supabase
-      .from('budget_weekly')
+      .from('budget_categories')
       .select('*')
       .eq('user_id', userId)
-      .order('week_start', { ascending: false })
-      .limit(20);
-    if (data) setBudgets(data);
+      .order('sort_order');
+    if (data) setCategories(data);
   }, [userId]);
 
-  useEffect(() => {
-    loadBudgets();
-  }, [loadBudgets]);
+  const loadEntriesForDate = useCallback(
+    async (d: string) => {
+      const { data } = await supabase
+        .from('budget_daily')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('date', d);
+      if (data) {
+        setEntries(data);
+        const amts: Record<string, number> = {};
+        const nts: Record<string, string> = {};
+        data.forEach((e) => {
+          amts[e.category_id] = e.amount;
+          nts[e.category_id] = e.notes ?? '';
+        });
+        setAmounts(amts);
+        setNotes(nts);
+      }
+    },
+    [userId]
+  );
 
-  // When week_start changes, load existing data for that week
-  useEffect(() => {
-    const existing = budgets.find((b) => b.week_start === form.week_start);
-    if (existing) {
-      setForm({
-        week_start: existing.week_start,
-        essentials: existing.essentials,
-        investments: existing.investments,
-        savings: existing.savings,
-        debt: existing.debt,
-        fun: existing.fun,
-        money_in: existing.money_in,
-        amex_balance: existing.amex_balance ?? 0,
-        notes: existing.notes ?? '',
+  const loadWeekEntries = useCallback(async () => {
+    const weekStart = getWeekStart(getToday());
+    const weekEnd = getWeekEnd(weekStart);
+    const { data } = await supabase
+      .from('budget_daily')
+      .select('*')
+      .eq('user_id', userId)
+      .gte('date', weekStart)
+      .lte('date', weekEnd);
+    if (data) setWeekEntries(data);
+  }, [userId]);
+
+  const loadMonthEntries = useCallback(async () => {
+    const monthStart = getMonthStart(getToday());
+    const monthEnd = getMonthEnd(getToday());
+    const { data } = await supabase
+      .from('budget_daily')
+      .select('*')
+      .eq('user_id', userId)
+      .gte('date', monthStart)
+      .lte('date', monthEnd);
+    if (data) setMonthEntries(data);
+  }, [userId]);
+
+  const loadTrendData = useCallback(async () => {
+    const startDate = getDaysAgo(30);
+    const { data } = await supabase
+      .from('budget_daily')
+      .select('*')
+      .eq('user_id', userId)
+      .gte('date', startDate)
+      .lte('date', getToday());
+    if (data) {
+      // Group by date and sum
+      const byDate: Record<string, number> = {};
+      data.forEach((e) => {
+        byDate[e.date] = (byDate[e.date] || 0) + e.amount;
       });
+      const trend = Object.entries(byDate)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([d, total]) => ({ date: d, total }));
+      setTrendData(trend);
     }
-  }, [form.week_start, budgets]);
+  }, [userId]);
+
+  const loadAll = useCallback(async () => {
+    await loadCategories();
+    await loadEntriesForDate(date);
+    await loadWeekEntries();
+    await loadMonthEntries();
+    await loadTrendData();
+  }, [loadCategories, loadEntriesForDate, date, loadWeekEntries, loadMonthEntries, loadTrendData]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  useEffect(() => {
+    loadEntriesForDate(date);
+  }, [date, loadEntriesForDate]);
 
   const handleSave = async () => {
     setSaving(true);
-    await supabase.from('budget_weekly').upsert(
-      {
-        user_id: userId,
-        week_start: form.week_start,
-        essentials: form.essentials,
-        investments: form.investments,
-        savings: form.savings,
-        debt: form.debt,
-        fun: form.fun,
-        money_in: form.money_in,
-        amex_balance: form.amex_balance || null,
-        notes: form.notes || null,
-      },
-      { onConflict: 'user_id,week_start' }
-    );
-    await loadBudgets();
+    for (const cat of categories) {
+      const amount = amounts[cat.id] || 0;
+      const note = notes[cat.id] || null;
+      if (amount > 0 || note) {
+        await supabase.from('budget_daily').upsert(
+          {
+            user_id: userId,
+            date,
+            category_id: cat.id,
+            amount,
+            notes: note,
+          },
+          { onConflict: 'user_id,date,category_id' }
+        );
+      }
+    }
+    await loadAll();
     setSaving(false);
   };
 
-  // Current week budget vs actual
-  const currentWeekStart = getWeekStart(getToday());
-  const currentWeek = budgets.find((b) => b.week_start === currentWeekStart);
-
-  // Month-to-date: sum all weeks in current month
-  const currentMonth = getToday().slice(0, 7);
-  const monthWeeks = budgets.filter((b) => b.week_start.startsWith(currentMonth));
-  const mtd = {
-    essentials: monthWeeks.reduce((s, b) => s + b.essentials, 0),
-    investments: monthWeeks.reduce((s, b) => s + b.investments, 0),
-    savings: monthWeeks.reduce((s, b) => s + b.savings, 0),
-    debt: monthWeeks.reduce((s, b) => s + b.debt, 0),
-    fun: monthWeeks.reduce((s, b) => s + b.fun, 0),
+  const addCategory = async () => {
+    if (!newCatName.trim() || newCatAmount <= 0) return;
+    await supabase.from('budget_categories').insert({
+      user_id: userId,
+      name: newCatName.trim(),
+      monthly_amount: newCatAmount,
+      sort_order: categories.length,
+    });
+    setNewCatName('');
+    setNewCatAmount(0);
+    await loadCategories();
   };
 
-  const categories = ['essentials', 'investments', 'savings', 'debt', 'fun'] as const;
+  const deleteCategory = async (catId: string) => {
+    await supabase.from('budget_categories').delete().eq('id', catId);
+    setDeleteConfirm(null);
+    await loadAll();
+  };
 
-  function varianceColor(actual: number, target: number, isSpending: boolean) {
-    if (actual === 0) return 'text-zinc-400';
-    if (isSpending) {
-      return actual <= target ? 'text-emerald-400' : 'text-red-400';
-    }
-    // For investments/savings, meeting or exceeding target is good
-    return actual >= target ? 'text-emerald-400' : 'text-amber-400';
-  }
+  const seedDefaults = async () => {
+    const rows = DEFAULT_BUDGET_CATEGORIES.map((c, i) => ({
+      user_id: userId,
+      name: c.name,
+      monthly_amount: c.monthly_amount,
+      sort_order: i,
+    }));
+    await supabase.from('budget_categories').insert(rows);
+    await loadAll();
+  };
 
-  const isSpendingCategory = (cat: string) => ['essentials', 'debt', 'fun'].includes(cat);
+  // Compute per-category sums for week and month
+  const weekSumByCat = (catId: string) =>
+    weekEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
+  const monthSumByCat = (catId: string) =>
+    monthEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
+  const todaySumByCat = (catId: string) =>
+    entries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
 
   return (
     <div className="space-y-6">
-      {/* Entry form */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Weekly Budget Entry</CardTitle>
-        </CardHeader>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-          <InputField
-            label="Week Start (Monday)"
-            type="date"
-            value={form.week_start}
-            onChange={(v) => setForm((f) => ({ ...f, week_start: v }))}
-          />
-          {categories.map((cat) => (
+      {/* Settings toggle */}
+      <div className="flex justify-end">
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+        >
+          <Settings className="w-4 h-4" />
+          {showSettings ? 'Hide Settings' : 'Manage Categories'}
+        </button>
+      </div>
+
+      {/* Category management */}
+      {showSettings && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Budget Categories</CardTitle>
+          </CardHeader>
+
+          {categories.length === 0 && (
+            <div className="text-center py-6">
+              <p className="text-zinc-400 mb-4">No categories yet.</p>
+              <button
+                onClick={seedDefaults}
+                className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Seed Defaults
+              </button>
+            </div>
+          )}
+
+          {categories.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {categories.map((cat) => (
+                <div
+                  key={cat.id}
+                  className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
+                >
+                  <div>
+                    <span className="text-sm font-medium text-white">{cat.name}</span>
+                    <span className="text-xs text-zinc-400 ml-3">
+                      {formatCurrency(cat.monthly_amount)}/mo
+                    </span>
+                    <span className="text-xs text-zinc-500 ml-2">
+                      ({formatCurrency(Math.round(cat.monthly_amount / 4.333))}/wk)
+                    </span>
+                  </div>
+                  {deleteConfirm === cat.id ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-red-400">Delete?</span>
+                      <button
+                        onClick={() => deleteCategory(cat.id)}
+                        className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                      >
+                        <Check className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => setDeleteConfirm(null)}
+                        className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setDeleteConfirm(cat.id)}
+                      className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add new category */}
+          <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
             <InputField
-              key={cat}
-              label={`${cat.charAt(0).toUpperCase() + cat.slice(1)} ($)`}
-              value={form[cat]}
-              step="0.01"
-              onChange={(v) => setForm((f) => ({ ...f, [cat]: parseFloat(v) || 0 }))}
+              label="Category Name"
+              type="text"
+              value={newCatName}
+              onChange={setNewCatName}
+              placeholder="e.g. Groceries"
+              className="flex-1"
             />
-          ))}
-          <InputField
-            label="Money In ($)"
-            value={form.money_in}
-            step="0.01"
-            onChange={(v) => setForm((f) => ({ ...f, money_in: parseFloat(v) || 0 }))}
-          />
-          <InputField
-            label="Amex Balance ($)"
-            value={form.amex_balance}
-            step="0.01"
-            onChange={(v) => setForm((f) => ({ ...f, amex_balance: parseFloat(v) || 0 }))}
-          />
-          <div className="col-span-2 sm:col-span-3 lg:col-span-4">
-            <TextArea
-              label="Notes"
-              value={form.notes}
-              onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
+            <InputField
+              label="Monthly Amount ($)"
+              value={newCatAmount || ''}
+              step="1"
+              onChange={(v) => setNewCatAmount(parseFloat(v) || 0)}
+              className="w-40"
+            />
+            <button
+              onClick={addCategory}
+              disabled={!newCatName.trim() || newCatAmount <= 0}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+            >
+              <Plus className="w-4 h-4" />
+              Add
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {/* Daily spending entry */}
+      {categories.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Daily Spending Entry</CardTitle>
+          </CardHeader>
+          <div className="mb-4">
+            <InputField
+              label="Date"
+              type="date"
+              value={date}
+              onChange={setDate}
+              className="w-48"
             />
           </div>
-        </div>
-        <div className="mt-4 flex justify-end">
-          <SaveButton saving={saving} onClick={handleSave} />
-        </div>
-      </Card>
-
-      {/* Current week vs target */}
-      <Card>
-        <CardHeader>
-          <CardTitle>This Week vs Target</CardTitle>
-        </CardHeader>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-          {categories.map((cat) => {
-            const actual = currentWeek?.[cat] ?? 0;
-            const target = BUDGET_TARGETS[cat].weekly;
-            const variance = actual - target;
-            return (
-              <div key={cat} className="bg-zinc-800 rounded-lg p-3">
-                <div className="text-xs text-zinc-400 capitalize mb-1">{cat}</div>
-                <div className="text-lg font-semibold text-white">
-                  {formatCurrency(actual)}
-                </div>
-                <div className="text-xs text-zinc-500">
-                  Target: {formatCurrency(target)}
-                </div>
-                <div
-                  className={cn(
-                    'text-sm font-medium mt-1',
-                    varianceColor(actual, target, isSpendingCategory(cat))
-                  )}
-                >
-                  {variance >= 0 ? '+' : ''}
-                  {formatCurrency(variance)}
-                </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {categories.map((cat) => (
+              <div key={cat.id} className="bg-zinc-800 rounded-lg p-3 space-y-2">
+                <div className="text-sm font-medium text-white">{cat.name}</div>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={amounts[cat.id] || ''}
+                  placeholder="0"
+                  onChange={(e) =>
+                    setAmounts((a) => ({ ...a, [cat.id]: parseFloat(e.target.value) || 0 }))
+                  }
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                />
+                <input
+                  type="text"
+                  value={notes[cat.id] || ''}
+                  placeholder="Notes (optional)"
+                  onChange={(e) => setNotes((n) => ({ ...n, [cat.id]: e.target.value }))}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-blue-600 transition-colors"
+                />
               </div>
-            );
-          })}
-        </div>
-      </Card>
+            ))}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <SaveButton saving={saving} onClick={handleSave} />
+          </div>
+        </Card>
+      )}
 
-      {/* Month-to-date vs monthly target */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Month-to-Date vs Monthly Target</CardTitle>
-        </CardHeader>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-          {categories.map((cat) => {
-            const actual = mtd[cat];
-            const target = BUDGET_TARGETS[cat].monthly;
-            const variance = actual - target;
-            const pct = target > 0 ? Math.round((actual / target) * 100) : 0;
-            return (
-              <div key={cat} className="bg-zinc-800 rounded-lg p-3">
-                <div className="text-xs text-zinc-400 capitalize mb-1">{cat}</div>
-                <div className="text-lg font-semibold text-white">
-                  {formatCurrency(actual)}
+      {/* Dashboard: Today */}
+      {categories.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Today</CardTitle>
+          </CardHeader>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            {categories.map((cat) => {
+              const spent = todaySumByCat(cat.id);
+              return (
+                <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
+                  <div className="text-xs text-zinc-400 mb-1">{cat.name}</div>
+                  <div className="text-lg font-semibold text-white">
+                    {formatCurrency(spent)}
+                  </div>
                 </div>
-                <div className="text-xs text-zinc-500">
-                  Target: {formatCurrency(target)}
-                </div>
-                <div className="w-full bg-zinc-700 rounded-full h-1.5 mt-2">
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Dashboard: This Week */}
+      {categories.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>This Week (Mon-Sun)</CardTitle>
+          </CardHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {categories.map((cat) => {
+              const spent = weekSumByCat(cat.id);
+              const weeklyBudget = Math.round(cat.monthly_amount / 4.333);
+              const pct = weeklyBudget > 0 ? Math.round((spent / weeklyBudget) * 100) : 0;
+              const over = spent > weeklyBudget;
+              return (
+                <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-zinc-400">{cat.name}</span>
+                    <span className="text-xs text-zinc-500">
+                      {formatCurrency(weeklyBudget)}/wk
+                    </span>
+                  </div>
+                  <div className="text-lg font-semibold text-white mb-1">
+                    {formatCurrency(spent)}
+                  </div>
+                  <div className="w-full bg-zinc-700 rounded-full h-2">
+                    <div
+                      className={cn(
+                        'h-2 rounded-full transition-all',
+                        over ? 'bg-red-500' : 'bg-emerald-500'
+                      )}
+                      style={{ width: `${Math.min(pct, 100)}%` }}
+                    />
+                  </div>
                   <div
                     className={cn(
-                      'h-1.5 rounded-full transition-all',
-                      pct > 100 && isSpendingCategory(cat)
-                        ? 'bg-red-500'
-                        : pct > 100
-                          ? 'bg-emerald-500'
-                          : 'bg-blue-500'
+                      'text-xs mt-1',
+                      over ? 'text-red-400' : 'text-emerald-400'
                     )}
-                    style={{ width: `${Math.min(pct, 100)}%` }}
-                  />
+                  >
+                    {pct}% of weekly budget
+                  </div>
                 </div>
-                <div
-                  className={cn(
-                    'text-xs mt-1',
-                    varianceColor(actual, target, isSpendingCategory(cat))
-                  )}
-                >
-                  {pct}% &middot; {variance >= 0 ? '+' : ''}
-                  {formatCurrency(variance)}
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Dashboard: This Month */}
+      {categories.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>This Month</CardTitle>
+          </CardHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {categories.map((cat) => {
+              const spent = monthSumByCat(cat.id);
+              const pct =
+                cat.monthly_amount > 0
+                  ? Math.round((spent / cat.monthly_amount) * 100)
+                  : 0;
+              const over = spent > cat.monthly_amount;
+              return (
+                <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-zinc-400">{cat.name}</span>
+                    <span className="text-xs text-zinc-500">
+                      {formatCurrency(cat.monthly_amount)}/mo
+                    </span>
+                  </div>
+                  <div className="text-lg font-semibold text-white mb-1">
+                    {formatCurrency(spent)}
+                  </div>
+                  <div className="w-full bg-zinc-700 rounded-full h-2">
+                    <div
+                      className={cn(
+                        'h-2 rounded-full transition-all',
+                        over ? 'bg-red-500' : 'bg-emerald-500'
+                      )}
+                      style={{ width: `${Math.min(pct, 100)}%` }}
+                    />
+                  </div>
+                  <div
+                    className={cn('text-xs mt-1', over ? 'text-red-400' : 'text-emerald-400')}
+                  >
+                    {pct}% of monthly budget
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Spending Trend */}
+      {trendData.length > 1 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Spending Trend (Last 30 Days)</CardTitle>
+          </CardHeader>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={trendData}>
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: '#a1a1aa', fontSize: 10 }}
+                  axisLine={{ stroke: '#3f3f46' }}
+                  tickLine={false}
+                  tickFormatter={(v) => v.slice(5)}
+                />
+                <YAxis
+                  tick={{ fill: '#a1a1aa', fontSize: 12 }}
+                  axisLine={{ stroke: '#3f3f46' }}
+                  tickLine={false}
+                  tickFormatter={(v) => `$${v}`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#18181b',
+                    border: '1px solid #3f3f46',
+                    borderRadius: '8px',
+                    color: '#fff',
+                  }}
+                  formatter={(value) => [formatCurrency(Number(value)), 'Total Spent']}
+                  labelFormatter={(label) => formatDate(String(label))}
+                />
+                <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -437,243 +726,418 @@ function BudgetTab({ userId }: { userId: string }) {
 function CashFlowTab({ userId }: { userId: string }) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
-  const [entries, setEntries] = useState<CashflowDaily[]>([]);
-  const [form, setForm] = useState({
-    date: getToday(),
-    personal_in: 0,
-    personal_out: 0,
-    savings_in: 0,
-    savings_out: 0,
-    frameworks_in: 0,
-    frameworks_out: 0,
-    frameworks_savings_in: 0,
-    frameworks_savings_out: 0,
-    notes: '',
-  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [date, setDate] = useState(getToday());
+  const [balances, setBalances] = useState<Record<string, number>>({});
+  const [todayBalances, setTodayBalances] = useState<Record<string, number>>({});
+  const [yesterdayBalances, setYesterdayBalances] = useState<Record<string, number>>({});
+  const [trendData, setTrendData] = useState<(Record<string, unknown> & { date: string })[]>([]);
+  const [newAccountName, setNewAccountName] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  const loadEntries = useCallback(async () => {
+  const loadAccounts = useCallback(async () => {
     const { data } = await supabase
-      .from('cashflow_daily')
+      .from('accounts')
       .select('*')
       .eq('user_id', userId)
-      .order('date', { ascending: false })
-      .limit(30);
-    if (data) setEntries(data);
+      .order('sort_order');
+    if (data) setAccounts(data);
   }, [userId]);
 
-  useEffect(() => {
-    loadEntries();
-  }, [loadEntries]);
+  const loadBalancesForDate = useCallback(
+    async (d: string) => {
+      const { data } = await supabase
+        .from('account_balances')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('date', d);
+      if (data) {
+        const bals: Record<string, number> = {};
+        data.forEach((b: AccountBalance) => {
+          bals[b.account_id] = b.balance;
+        });
+        return bals;
+      }
+      return {};
+    },
+    [userId]
+  );
 
-  // Load existing entry when date changes
-  useEffect(() => {
-    const existing = entries.find((e) => e.date === form.date);
-    if (existing) {
-      setForm({
-        date: existing.date,
-        personal_in: existing.personal_in,
-        personal_out: existing.personal_out,
-        savings_in: existing.savings_in,
-        savings_out: existing.savings_out,
-        frameworks_in: existing.frameworks_in,
-        frameworks_out: existing.frameworks_out,
-        frameworks_savings_in: existing.frameworks_savings_in,
-        frameworks_savings_out: existing.frameworks_savings_out,
-        notes: existing.notes ?? '',
+  const loadDashboardData = useCallback(async () => {
+    const today = getToday();
+    const yesterday = getYesterday();
+    const tBals = await loadBalancesForDate(today);
+    const yBals = await loadBalancesForDate(yesterday);
+    setTodayBalances(tBals);
+    setYesterdayBalances(yBals);
+  }, [loadBalancesForDate]);
+
+  const loadTrendData = useCallback(async () => {
+    const ninetyDaysAgo = getDaysAgo(90);
+    const { data } = await supabase
+      .from('account_balances')
+      .select('*, accounts(name)')
+      .eq('user_id', userId)
+      .gte('date', ninetyDaysAgo)
+      .order('date');
+    if (data) {
+      // Group by date
+      const byDate: Record<string, Record<string, number>> = {};
+      data.forEach((b: AccountBalance & { accounts: { name: string } | null }) => {
+        if (!byDate[b.date]) byDate[b.date] = {};
+        const accName = b.accounts?.name ?? b.account_id;
+        byDate[b.date][accName] = b.balance;
       });
+      const trend = Object.entries(byDate)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([d, bals]) => {
+          const total = Object.values(bals).reduce((s, v) => s + v, 0);
+          return { date: d, total, ...bals } as Record<string, unknown> & { date: string };
+        });
+      setTrendData(trend);
     }
-  }, [form.date, entries]);
+  }, [userId]);
+
+  const loadFormBalances = useCallback(async () => {
+    const bals = await loadBalancesForDate(date);
+    setBalances(bals);
+  }, [date, loadBalancesForDate]);
+
+  const loadAll = useCallback(async () => {
+    await loadAccounts();
+    await loadFormBalances();
+    await loadDashboardData();
+    await loadTrendData();
+  }, [loadAccounts, loadFormBalances, loadDashboardData, loadTrendData]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  useEffect(() => {
+    loadFormBalances();
+  }, [date, loadFormBalances]);
 
   const handleSave = async () => {
     setSaving(true);
-    await supabase.from('cashflow_daily').upsert(
-      {
-        user_id: userId,
-        date: form.date,
-        personal_in: form.personal_in,
-        personal_out: form.personal_out,
-        savings_in: form.savings_in,
-        savings_out: form.savings_out,
-        frameworks_in: form.frameworks_in,
-        frameworks_out: form.frameworks_out,
-        frameworks_savings_in: form.frameworks_savings_in,
-        frameworks_savings_out: form.frameworks_savings_out,
-        notes: form.notes || null,
-      },
-      { onConflict: 'user_id,date' }
-    );
-    await loadEntries();
+    for (const acc of accounts) {
+      const balance = balances[acc.id];
+      if (balance !== undefined) {
+        await supabase.from('account_balances').upsert(
+          {
+            user_id: userId,
+            account_id: acc.id,
+            date,
+            balance,
+          },
+          { onConflict: 'user_id,account_id,date' }
+        );
+      }
+    }
+    await loadAll();
     setSaving(false);
   };
 
-  // Show last 14 days
-  const last14 = entries.slice(0, 14);
-
-  // Running balances (cumulative from oldest to newest)
-  const sorted = [...entries].reverse();
-  const runningBalances = new Map<
-    string,
-    { personal: number; savings: number; frameworks: number; frameworksSavings: number }
-  >();
-  let rPersonal = 0;
-  let rSavings = 0;
-  let rFrameworks = 0;
-  let rFwSavings = 0;
-  for (const e of sorted) {
-    rPersonal += e.personal_in - e.personal_out;
-    rSavings += e.savings_in - e.savings_out;
-    rFrameworks += e.frameworks_in - e.frameworks_out;
-    rFwSavings += e.frameworks_savings_in - e.frameworks_savings_out;
-    runningBalances.set(e.date, {
-      personal: rPersonal,
-      savings: rSavings,
-      frameworks: rFrameworks,
-      frameworksSavings: rFwSavings,
+  const addAccount = async () => {
+    if (!newAccountName.trim()) return;
+    await supabase.from('accounts').insert({
+      user_id: userId,
+      name: newAccountName.trim(),
+      sort_order: accounts.length,
     });
-  }
-
-  const flowFields = [
-    'personal_in',
-    'personal_out',
-    'savings_in',
-    'savings_out',
-    'frameworks_in',
-    'frameworks_out',
-    'frameworks_savings_in',
-    'frameworks_savings_out',
-  ] as const;
-
-  const fieldLabels: Record<string, string> = {
-    personal_in: 'Personal In',
-    personal_out: 'Personal Out',
-    savings_in: 'Savings In',
-    savings_out: 'Savings Out',
-    frameworks_in: 'Frameworks In',
-    frameworks_out: 'Frameworks Out',
-    frameworks_savings_in: 'FW Savings In',
-    frameworks_savings_out: 'FW Savings Out',
+    setNewAccountName('');
+    await loadAccounts();
   };
+
+  const deleteAccount = async (accId: string) => {
+    await supabase.from('accounts').delete().eq('id', accId);
+    setDeleteConfirm(null);
+    await loadAll();
+  };
+
+  const seedDefaults = async () => {
+    const rows = DEFAULT_ACCOUNTS.map((name, i) => ({
+      user_id: userId,
+      name,
+      sort_order: i,
+    }));
+    await supabase.from('accounts').insert(rows);
+    await loadAll();
+  };
+
+  const totalToday = accounts.reduce((s, a) => s + (todayBalances[a.id] || 0), 0);
+  const accountNames = accounts.map((a) => a.name);
+
+  // Colors for account lines
+  const lineColors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#f97316', '#ec4899'];
 
   return (
     <div className="space-y-6">
-      {/* Entry form */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Daily Cash Flow Entry</CardTitle>
-        </CardHeader>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-          <InputField
-            label="Date"
-            type="date"
-            value={form.date}
-            onChange={(v) => setForm((f) => ({ ...f, date: v }))}
-          />
-          {flowFields.map((field) => (
+      {/* Settings toggle */}
+      <div className="flex justify-end">
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+        >
+          <Settings className="w-4 h-4" />
+          {showSettings ? 'Hide Settings' : 'Manage Accounts'}
+        </button>
+      </div>
+
+      {/* Account management */}
+      {showSettings && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Accounts</CardTitle>
+          </CardHeader>
+
+          {accounts.length === 0 && (
+            <div className="text-center py-6">
+              <p className="text-zinc-400 mb-4">No accounts yet.</p>
+              <button
+                onClick={seedDefaults}
+                className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Seed Defaults
+              </button>
+            </div>
+          )}
+
+          {accounts.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {accounts.map((acc) => (
+                <div
+                  key={acc.id}
+                  className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
+                >
+                  <span className="text-sm font-medium text-white">{acc.name}</span>
+                  {deleteConfirm === acc.id ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-red-400">Delete?</span>
+                      <button
+                        onClick={() => deleteAccount(acc.id)}
+                        className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                      >
+                        <Check className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => setDeleteConfirm(null)}
+                        className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setDeleteConfirm(acc.id)}
+                      className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
             <InputField
-              key={field}
-              label={fieldLabels[field]}
-              value={form[field]}
-              step="0.01"
-              onChange={(v) =>
-                setForm((f) => ({ ...f, [field]: parseFloat(v) || 0 }))
-              }
+              label="Account Name"
+              type="text"
+              value={newAccountName}
+              onChange={setNewAccountName}
+              placeholder="e.g. Savings Account"
+              className="flex-1"
             />
-          ))}
-          <div className="col-span-2 sm:col-span-3 lg:col-span-5">
-            <TextArea
-              label="Notes"
-              value={form.notes}
-              onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
+            <button
+              onClick={addAccount}
+              disabled={!newAccountName.trim()}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+            >
+              <Plus className="w-4 h-4" />
+              Add
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {/* Daily balance entry */}
+      {accounts.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Daily Balance Entry</CardTitle>
+          </CardHeader>
+          <div className="mb-4">
+            <InputField
+              label="Date"
+              type="date"
+              value={date}
+              onChange={setDate}
+              className="w-48"
             />
           </div>
-        </div>
-        <div className="mt-4 flex justify-end">
-          <SaveButton saving={saving} onClick={handleSave} />
-        </div>
-      </Card>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {accounts.map((acc) => (
+              <InputField
+                key={acc.id}
+                label={acc.name}
+                value={balances[acc.id] ?? ''}
+                step="0.01"
+                placeholder="0.00"
+                onChange={(v) =>
+                  setBalances((b) => ({ ...b, [acc.id]: parseFloat(v) || 0 }))
+                }
+              />
+            ))}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <SaveButton saving={saving} onClick={handleSave} />
+          </div>
+        </Card>
+      )}
 
-      {/* Last 14 days table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Last 14 Days</CardTitle>
-        </CardHeader>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-zinc-800 text-zinc-400 text-xs">
-                <th className="text-left py-2 px-2">Date</th>
-                <th className="text-right py-2 px-2">Pers. In</th>
-                <th className="text-right py-2 px-2">Pers. Out</th>
-                <th className="text-right py-2 px-2">Sav. In</th>
-                <th className="text-right py-2 px-2">Sav. Out</th>
-                <th className="text-right py-2 px-2">FW In</th>
-                <th className="text-right py-2 px-2">FW Out</th>
-                <th className="text-right py-2 px-2">FWS In</th>
-                <th className="text-right py-2 px-2">FWS Out</th>
-                <th className="text-right py-2 px-2 border-l border-zinc-700">Pers. Bal</th>
-                <th className="text-right py-2 px-2">Sav. Bal</th>
-                <th className="text-right py-2 px-2">FW Bal</th>
-                <th className="text-right py-2 px-2">FWS Bal</th>
-              </tr>
-            </thead>
-            <tbody>
-              {last14.map((e) => {
-                const bal = runningBalances.get(e.date);
-                return (
-                  <tr key={e.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                    <td className="py-2 px-2 text-white">{formatDate(e.date)}</td>
-                    <td className="py-2 px-2 text-right text-emerald-400">
-                      {e.personal_in > 0 ? formatCurrency(e.personal_in) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-red-400">
-                      {e.personal_out > 0 ? formatCurrency(e.personal_out) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-emerald-400">
-                      {e.savings_in > 0 ? formatCurrency(e.savings_in) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-red-400">
-                      {e.savings_out > 0 ? formatCurrency(e.savings_out) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-emerald-400">
-                      {e.frameworks_in > 0 ? formatCurrency(e.frameworks_in) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-red-400">
-                      {e.frameworks_out > 0 ? formatCurrency(e.frameworks_out) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-emerald-400">
-                      {e.frameworks_savings_in > 0 ? formatCurrency(e.frameworks_savings_in) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-red-400">
-                      {e.frameworks_savings_out > 0
-                        ? formatCurrency(e.frameworks_savings_out)
-                        : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right border-l border-zinc-700 text-white font-medium">
-                      {bal ? formatCurrency(bal.personal) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-white font-medium">
-                      {bal ? formatCurrency(bal.savings) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-white font-medium">
-                      {bal ? formatCurrency(bal.frameworks) : '-'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-white font-medium">
-                      {bal ? formatCurrency(bal.frameworksSavings) : '-'}
-                    </td>
-                  </tr>
-                );
-              })}
-              {last14.length === 0 && (
-                <tr>
-                  <td colSpan={13} className="text-center text-zinc-500 py-8">
-                    No cash flow entries yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      {/* Dashboard: Account balances */}
+      {accounts.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Account Balances</CardTitle>
+          </CardHeader>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mb-4">
+            {accounts.map((acc) => {
+              const today = todayBalances[acc.id] || 0;
+              const yesterday = yesterdayBalances[acc.id] || 0;
+              const change = today - yesterday;
+              return (
+                <div key={acc.id} className="bg-zinc-800 rounded-lg p-3">
+                  <div className="text-xs text-zinc-400 mb-1">{acc.name}</div>
+                  <div className="text-lg font-semibold text-white">
+                    {formatCurrencyDecimal(today)}
+                  </div>
+                  <div className="text-xs text-zinc-500">
+                    Yesterday: {formatCurrencyDecimal(yesterday)}
+                  </div>
+                  {change !== 0 && (
+                    <div
+                      className={cn(
+                        'text-sm font-medium mt-1',
+                        change > 0 ? 'text-emerald-400' : 'text-red-400'
+                      )}
+                    >
+                      {change > 0 ? '+' : ''}
+                      {formatCurrencyDecimal(change)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Total liquid cash */}
+          <div className="bg-zinc-800 border border-blue-600/30 rounded-lg p-4">
+            <div className="text-sm text-zinc-400">Total Liquid Cash</div>
+            <div className="text-3xl font-bold text-white">
+              {formatCurrencyDecimal(totalToday)}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Total Cash Trend */}
+      {trendData.length > 1 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Total Cash Trend (Last 90 Days)</CardTitle>
+          </CardHeader>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={trendData}>
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: '#a1a1aa', fontSize: 10 }}
+                  axisLine={{ stroke: '#3f3f46' }}
+                  tickLine={false}
+                  tickFormatter={(v) => v.slice(5)}
+                />
+                <YAxis
+                  tick={{ fill: '#a1a1aa', fontSize: 12 }}
+                  axisLine={{ stroke: '#3f3f46' }}
+                  tickLine={false}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#18181b',
+                    border: '1px solid #3f3f46',
+                    borderRadius: '8px',
+                    color: '#fff',
+                  }}
+                  formatter={(value) => [formatCurrencyDecimal(Number(value))]}
+                  labelFormatter={(label) => formatDate(String(label))}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="total"
+                  name="Total Cash"
+                  stroke="#3b82f6"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Individual Account Trends */}
+      {trendData.length > 1 && accountNames.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Individual Account Trends (Last 90 Days)</CardTitle>
+          </CardHeader>
+          <div className="h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={trendData}>
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: '#a1a1aa', fontSize: 10 }}
+                  axisLine={{ stroke: '#3f3f46' }}
+                  tickLine={false}
+                  tickFormatter={(v) => v.slice(5)}
+                />
+                <YAxis
+                  tick={{ fill: '#a1a1aa', fontSize: 12 }}
+                  axisLine={{ stroke: '#3f3f46' }}
+                  tickLine={false}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#18181b',
+                    border: '1px solid #3f3f46',
+                    borderRadius: '8px',
+                    color: '#fff',
+                  }}
+                  formatter={(value) => [formatCurrencyDecimal(Number(value))]}
+                  labelFormatter={(label) => formatDate(String(label))}
+                />
+                <Legend wrapperStyle={{ color: '#a1a1aa', fontSize: 12 }} />
+                {accountNames.map((name, i) => (
+                  <Line
+                    key={name}
+                    type="monotone"
+                    dataKey={name}
+                    stroke={lineColors[i % lineColors.length]}
+                    strokeWidth={1.5}
+                    dot={false}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -876,126 +1340,196 @@ function ReimbursementsTab({ userId }: { userId: string }) {
 function NetWorthTab({ userId }: { userId: string }) {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
-  const [snapshots, setSnapshots] = useState<NetWorthMonthly[]>([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [items, setItems] = useState<NetWorthItem[]>([]);
+  const [currentEntries, setCurrentEntries] = useState<
+    (NetWorthEntry & { net_worth_items: { name: string; type: string } | null })[]
+  >([]);
+  const [allEntries, setAllEntries] = useState<
+    (NetWorthEntry & { net_worth_items: { type: string } | null })[]
+  >([]);
+  const [month, setMonth] = useState(getMonthStart(getToday()));
+  const [values, setValues] = useState<Record<string, number>>({});
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemType, setNewItemType] = useState<'asset' | 'liability'>('asset');
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  const currentMonth = getToday().slice(0, 7) + '-01';
-  const [form, setForm] = useState({
-    month: currentMonth,
-    rbc_balance: 0,
-    triangle_balance: 0,
-    scotia_visa: 0,
-    scotia_loc: 0,
-    td_loan_tesla: 0,
-    taxes_owed: 0,
-    cash_investments: 0,
-    business_assets: 0,
-    protocase_shares: 0,
-    vehicle_assets: 0,
-  });
+  const assets = items.filter((i) => i.type === 'asset');
+  const liabilities = items.filter((i) => i.type === 'liability');
 
-  const loadSnapshots = useCallback(async () => {
+  const loadItems = useCallback(async () => {
     const { data } = await supabase
-      .from('net_worth_monthly')
+      .from('net_worth_items')
       .select('*')
       .eq('user_id', userId)
-      .order('month', { ascending: true });
-    if (data) setSnapshots(data);
+      .order('sort_order');
+    if (data) setItems(data);
   }, [userId]);
 
-  useEffect(() => {
-    loadSnapshots();
-  }, [loadSnapshots]);
+  const loadEntriesForMonth = useCallback(
+    async (m: string) => {
+      const { data } = await supabase
+        .from('net_worth_entries')
+        .select('*, net_worth_items(name, type)')
+        .eq('user_id', userId)
+        .eq('month', m);
+      if (data) {
+        setCurrentEntries(data);
+        const vals: Record<string, number> = {};
+        data.forEach((e) => {
+          vals[e.item_id] = e.value;
+        });
+        setValues(vals);
+      }
+    },
+    [userId]
+  );
 
-  // Load existing data when month changes
+  const loadAllEntries = useCallback(async () => {
+    const { data } = await supabase
+      .from('net_worth_entries')
+      .select('*, net_worth_items(type)')
+      .eq('user_id', userId)
+      .order('month');
+    if (data) setAllEntries(data);
+  }, [userId]);
+
+  const loadAll = useCallback(async () => {
+    await loadItems();
+    await loadEntriesForMonth(month);
+    await loadAllEntries();
+  }, [loadItems, loadEntriesForMonth, month, loadAllEntries]);
+
   useEffect(() => {
-    const existing = snapshots.find((s) => s.month === form.month);
-    if (existing) {
-      setForm({
-        month: existing.month,
-        rbc_balance: existing.rbc_balance,
-        triangle_balance: existing.triangle_balance,
-        scotia_visa: existing.scotia_visa,
-        scotia_loc: existing.scotia_loc,
-        td_loan_tesla: existing.td_loan_tesla,
-        taxes_owed: existing.taxes_owed,
-        cash_investments: existing.cash_investments,
-        business_assets: existing.business_assets,
-        protocase_shares: existing.protocase_shares,
-        vehicle_assets: existing.vehicle_assets,
-      });
-    }
-  }, [form.month, snapshots]);
+    loadAll();
+  }, [loadAll]);
+
+  useEffect(() => {
+    loadEntriesForMonth(month);
+  }, [month, loadEntriesForMonth]);
 
   const handleSave = async () => {
     setSaving(true);
-    await supabase.from('net_worth_monthly').upsert(
-      {
-        user_id: userId,
-        ...form,
-      },
-      { onConflict: 'user_id,month' }
-    );
-    await loadSnapshots();
+    for (const item of items) {
+      const value = values[item.id];
+      if (value !== undefined) {
+        await supabase.from('net_worth_entries').upsert(
+          {
+            user_id: userId,
+            item_id: item.id,
+            month,
+            value,
+          },
+          { onConflict: 'user_id,item_id,month' }
+        );
+      }
+    }
+    await loadAll();
     setSaving(false);
   };
 
-  const liabilityFields = [
-    'rbc_balance',
-    'triangle_balance',
-    'scotia_visa',
-    'scotia_loc',
-    'td_loan_tesla',
-    'taxes_owed',
-  ] as const;
-
-  const assetFields = [
-    'cash_investments',
-    'business_assets',
-    'protocase_shares',
-    'vehicle_assets',
-  ] as const;
-
-  const liabilityLabels: Record<string, string> = {
-    rbc_balance: 'RBC Balance',
-    triangle_balance: 'Triangle Balance',
-    scotia_visa: 'Scotia Visa',
-    scotia_loc: 'Scotia LOC',
-    td_loan_tesla: 'TD Loan (Tesla)',
-    taxes_owed: 'Taxes Owed',
+  const addItem = async () => {
+    if (!newItemName.trim()) return;
+    const sameTypeItems = items.filter((i) => i.type === newItemType);
+    await supabase.from('net_worth_items').insert({
+      user_id: userId,
+      type: newItemType,
+      name: newItemName.trim(),
+      sort_order: sameTypeItems.length,
+    });
+    setNewItemName('');
+    await loadItems();
   };
 
-  const assetLabels: Record<string, string> = {
-    cash_investments: 'Cash & Investments',
-    business_assets: 'Business Assets',
-    protocase_shares: 'Protocase Shares',
-    vehicle_assets: 'Vehicle Assets',
+  const deleteItem = async (itemId: string) => {
+    await supabase.from('net_worth_items').delete().eq('id', itemId);
+    setDeleteConfirm(null);
+    await loadAll();
   };
 
-  const totalLiabilities = liabilityFields.reduce(
-    (s, f) => s + (form[f] || 0),
-    0
-  );
-  const totalAssets = assetFields.reduce((s, f) => s + (form[f] || 0), 0);
+  const seedDefaults = async () => {
+    const assetRows = DEFAULT_NET_WORTH_ASSETS.map((name, i) => ({
+      user_id: userId,
+      type: 'asset' as const,
+      name,
+      sort_order: i,
+    }));
+    const liabilityRows = DEFAULT_NET_WORTH_LIABILITIES.map((name, i) => ({
+      user_id: userId,
+      type: 'liability' as const,
+      name,
+      sort_order: i,
+    }));
+    await supabase.from('net_worth_items').insert([...assetRows, ...liabilityRows]);
+    await loadAll();
+  };
+
+  // Compute totals from current values
+  const totalAssets = assets.reduce((s, a) => s + (values[a.id] || 0), 0);
+  const totalLiabilities = liabilities.reduce((s, l) => s + (values[l.id] || 0), 0);
   const netWorth = totalAssets - totalLiabilities;
 
-  // Chart data
-  const chartData = snapshots.map((s) => {
-    const liabs =
-      s.rbc_balance +
-      s.triangle_balance +
-      s.scotia_visa +
-      s.scotia_loc +
-      s.td_loan_tesla +
-      s.taxes_owed;
-    const assets =
-      s.cash_investments + s.business_assets + s.protocase_shares + s.vehicle_assets;
-    return {
-      month: s.month.slice(0, 7),
-      assets,
-      liabilities: liabs,
-      netWorth: assets - liabs,
-    };
-  });
+  // Compute trend chart data
+  const trendData = (() => {
+    const byMonth: Record<string, { assets: number; liabilities: number }> = {};
+    allEntries.forEach((e) => {
+      if (!byMonth[e.month]) byMonth[e.month] = { assets: 0, liabilities: 0 };
+      const type = e.net_worth_items?.type;
+      if (type === 'asset') {
+        byMonth[e.month].assets += e.value;
+      } else if (type === 'liability') {
+        byMonth[e.month].liabilities += e.value;
+      }
+    });
+    return Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([m, data]) => ({
+        month: m.slice(0, 7),
+        assets: data.assets,
+        liabilities: data.liabilities,
+        netWorth: data.assets - data.liabilities,
+      }));
+  })();
+
+  const renderItemList = (itemList: NetWorthItem[], label: string, color: string) => (
+    <div>
+      <h4 className={cn('text-sm font-medium mb-3', color)}>{label}</h4>
+      <div className="space-y-2">
+        {itemList.map((item) => (
+          <div
+            key={item.id}
+            className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
+          >
+            <span className="text-sm font-medium text-white">{item.name}</span>
+            {deleteConfirm === item.id ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-red-400">Delete?</span>
+                <button
+                  onClick={() => deleteItem(item.id)}
+                  className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                >
+                  <Check className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setDeleteConfirm(item.id)}
+                className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-6">
@@ -1026,76 +1560,150 @@ function NetWorthTab({ userId }: { userId: string }) {
         </Card>
       </div>
 
-      {/* Entry form */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Monthly Snapshot</CardTitle>
-        </CardHeader>
-        <div className="mb-4">
-          <InputField
-            label="Month (YYYY-MM-01)"
-            type="date"
-            value={form.month}
-            onChange={(v) => {
-              // Force to first of month
-              const d = v.slice(0, 7) + '-01';
-              setForm((f) => ({ ...f, month: d }));
-            }}
-          />
-        </div>
+      {/* Settings toggle */}
+      <div className="flex justify-end">
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+        >
+          <Settings className="w-4 h-4" />
+          {showSettings ? 'Hide Settings' : 'Manage Items'}
+        </button>
+      </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Liabilities */}
-          <div>
-            <h4 className="text-sm font-medium text-red-400 mb-3">Liabilities</h4>
-            <div className="grid grid-cols-2 gap-3">
-              {liabilityFields.map((field) => (
-                <InputField
-                  key={field}
-                  label={liabilityLabels[field]}
-                  value={form[field]}
-                  step="0.01"
-                  onChange={(v) =>
-                    setForm((f) => ({ ...f, [field]: parseFloat(v) || 0 }))
-                  }
-                />
-              ))}
+      {/* Item management */}
+      {showSettings && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Net Worth Items</CardTitle>
+          </CardHeader>
+
+          {items.length === 0 && (
+            <div className="text-center py-6">
+              <p className="text-zinc-400 mb-4">No items yet.</p>
+              <button
+                onClick={seedDefaults}
+                className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Seed Defaults
+              </button>
+            </div>
+          )}
+
+          {items.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-4">
+              {renderItemList(assets, 'Assets', 'text-emerald-400')}
+              {renderItemList(liabilities, 'Liabilities', 'text-red-400')}
+            </div>
+          )}
+
+          {/* Add new item */}
+          <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
+            <InputField
+              label="Item Name"
+              type="text"
+              value={newItemName}
+              onChange={setNewItemName}
+              placeholder="e.g. Real Estate"
+              className="flex-1"
+            />
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-zinc-400">Type</label>
+              <select
+                value={newItemType}
+                onChange={(e) => setNewItemType(e.target.value as 'asset' | 'liability')}
+                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+              >
+                <option value="asset">Asset</option>
+                <option value="liability">Liability</option>
+              </select>
+            </div>
+            <button
+              onClick={addItem}
+              disabled={!newItemName.trim()}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+            >
+              <Plus className="w-4 h-4" />
+              Add
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {/* Monthly snapshot entry */}
+      {items.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Monthly Snapshot</CardTitle>
+          </CardHeader>
+          <div className="mb-4">
+            <InputField
+              label="Month (YYYY-MM)"
+              type="month"
+              value={month.slice(0, 7)}
+              onChange={(v) => {
+                if (v) setMonth(v + '-01');
+              }}
+              className="w-48"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Assets */}
+            <div>
+              <h4 className="text-sm font-medium text-emerald-400 mb-3">Assets</h4>
+              <div className="grid grid-cols-2 gap-3">
+                {assets.map((item) => (
+                  <InputField
+                    key={item.id}
+                    label={item.name}
+                    value={values[item.id] ?? ''}
+                    step="0.01"
+                    placeholder="0.00"
+                    onChange={(v) =>
+                      setValues((vals) => ({ ...vals, [item.id]: parseFloat(v) || 0 }))
+                    }
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Liabilities */}
+            <div>
+              <h4 className="text-sm font-medium text-red-400 mb-3">Liabilities</h4>
+              <div className="grid grid-cols-2 gap-3">
+                {liabilities.map((item) => (
+                  <InputField
+                    key={item.id}
+                    label={item.name}
+                    value={values[item.id] ?? ''}
+                    step="0.01"
+                    placeholder="0.00"
+                    onChange={(v) =>
+                      setValues((vals) => ({ ...vals, [item.id]: parseFloat(v) || 0 }))
+                    }
+                  />
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Assets */}
-          <div>
-            <h4 className="text-sm font-medium text-emerald-400 mb-3">Assets</h4>
-            <div className="grid grid-cols-2 gap-3">
-              {assetFields.map((field) => (
-                <InputField
-                  key={field}
-                  label={assetLabels[field]}
-                  value={form[field]}
-                  step="0.01"
-                  onChange={(v) =>
-                    setForm((f) => ({ ...f, [field]: parseFloat(v) || 0 }))
-                  }
-                />
-              ))}
-            </div>
+          <div className="mt-4 flex justify-end">
+            <SaveButton saving={saving} onClick={handleSave} />
           </div>
-        </div>
-
-        <div className="mt-4 flex justify-end">
-          <SaveButton saving={saving} onClick={handleSave} />
-        </div>
-      </Card>
+        </Card>
+      )}
 
       {/* Net worth trend chart */}
-      {chartData.length > 1 && (
+      {trendData.length > 1 && (
         <Card>
           <CardHeader>
             <CardTitle>Net Worth Trend</CardTitle>
           </CardHeader>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
+              <LineChart data={trendData}>
                 <XAxis
                   dataKey="month"
                   tick={{ fill: '#a1a1aa', fontSize: 12 }}
@@ -1117,9 +1725,7 @@ function NetWorthTab({ userId }: { userId: string }) {
                   }}
                   formatter={(value) => [formatCurrency(Number(value))]}
                 />
-                <Legend
-                  wrapperStyle={{ color: '#a1a1aa', fontSize: 12 }}
-                />
+                <Legend wrapperStyle={{ color: '#a1a1aa', fontSize: 12 }} />
                 <Line
                   type="monotone"
                   dataKey="netWorth"
