@@ -58,12 +58,15 @@ import {
   Loader2,
   Trash2,
   Settings,
+  LayoutDashboard,
 } from 'lucide-react';
+import { FinanceOverview } from '@/components/finance-overview';
 
-const TABS = ['Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Investments'] as const;
+const TABS = ['Overview', 'Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Investments'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_ICONS: Record<Tab, React.ReactNode> = {
+  Overview: <LayoutDashboard className="w-4 h-4" />,
   Budget: <DollarSign className="w-4 h-4" />,
   'Cash Flow': <TrendingUp className="w-4 h-4" />,
   Reimbursements: <Receipt className="w-4 h-4" />,
@@ -252,7 +255,7 @@ function getYesterday(): string {
 export default function FinancesPage() {
   const { user, loading: authLoading } = useAuth();
   const { householdId, canEditFinances } = useHousehold();
-  const [activeTab, setActiveTab] = useState<Tab>('Budget');
+  const [activeTab, setActiveTab] = useState<Tab>('Overview');
 
   if (authLoading) {
     return (
@@ -301,6 +304,9 @@ export default function FinancesPage() {
       </div>
 
       {/* Tab panels */}
+      {activeTab === 'Overview' && (
+        <FinanceOverview householdId={householdId} onNavigate={(tab) => setActiveTab(tab as Tab)} />
+      )}
       {activeTab === 'Budget' && (
         <BudgetTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
       )}
