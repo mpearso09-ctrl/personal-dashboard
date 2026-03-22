@@ -65,19 +65,28 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
 
       const { data: allMembers } = await supabase
         .from('household_members')
-        .select('*')
+        .select('id, household_id, user_id, display_name, finance_role, created_at')
         .eq('household_id', hh.id);
 
       setMembers(allMembers ?? []);
     } else if (ownedHouseholds && ownedHouseholds.length > 0) {
       const hh = ownedHouseholds[0];
       setHousehold(hh);
-      await supabase
+      // Ensure membership exists without overwriting display_name
+      const { data: existing } = await supabase
         .from('household_members')
-        .upsert({ household_id: hh.id, user_id: user.id, finance_role: 'full_access', display_name: user.email?.split('@')[0] ?? null }, { onConflict: 'household_id,user_id' });
+        .select('id')
+        .eq('household_id', hh.id)
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (!existing) {
+        await supabase
+          .from('household_members')
+          .insert({ household_id: hh.id, user_id: user.id, finance_role: 'full_access', display_name: user.email?.split('@')[0] ?? null });
+      }
       const { data: allMembers } = await supabase
         .from('household_members')
-        .select('*')
+        .select('id, household_id, user_id, display_name, finance_role, created_at')
         .eq('household_id', hh.id);
       setMembers(allMembers ?? []);
     } else {
@@ -101,7 +110,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         setHousehold(newHH);
         const { data: allMembers } = await supabase
           .from('household_members')
-          .select('*')
+          .select('id, household_id, user_id, display_name, finance_role, created_at')
           .eq('household_id', newHH.id);
         setMembers(allMembers ?? []);
       }
