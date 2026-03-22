@@ -37,16 +37,41 @@ export function useHousehold() {
   return useContext(HouseholdCtx);
 }
 
+// Fetch display names via raw REST to bypass PostgREST schema cache
+async function fetchDisplayNames(householdId: string, accessToken: string): Promise<Record<string, string>> {
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/household_members?select=user_id,display_name&household_id=eq.${householdId}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+    const rows: { user_id: string; display_name: string | null }[] = await res.json();
+    const map: Record<string, string> = {};
+    for (const row of rows) {
+      if (row.display_name) map[row.user_id] = row.display_name;
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 export function HouseholdProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const supabase = createClient();
 
   const [household, setHousehold] = useState<Household | null>(null);
   const [members, setMembers] = useState<HouseholdMember[]>([]);
+  const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!user) { setLoading(false); return; }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const accessToken = session?.access_token ?? '';
 
     const { data: ownedHouseholds } = await supabase
       .from('households')
@@ -58,17 +83,25 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       .select('*, households(*)')
       .eq('user_id', user.id);
 
+    let hhId: string | null = null;
+
     if (memberRows && memberRows.length > 0) {
       const membership = memberRows[0];
       const hh = membership.households as unknown as Household;
       setHousehold(hh);
+      hhId = hh.id;
 
-      const { data: allMembers } = await supabase.rpc('get_household_members', { p_household_id: hh.id });
-      setMembers((allMembers as HouseholdMember[]) ?? []);
+      const { data: allMembers } = await supabase
+        .from('household_members')
+        .select('*')
+        .eq('household_id', hh.id);
+
+      setMembers(allMembers ?? []);
     } else if (ownedHouseholds && ownedHouseholds.length > 0) {
       const hh = ownedHouseholds[0];
       setHousehold(hh);
-      // Ensure membership exists without overwriting display_name
+      hhId = hh.id;
+
       const { data: existing } = await supabase
         .from('household_members')
         .select('id')
@@ -78,10 +111,14 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       if (!existing) {
         await supabase
           .from('household_members')
-          .insert({ household_id: hh.id, user_id: user.id, finance_role: 'full_access', display_name: user.email?.split('@')[0] ?? null });
+          .insert({ household_id: hh.id, user_id: user.id, finance_role: 'full_access' });
       }
-      const { data: allMembers } = await supabase.rpc('get_household_members', { p_household_id: hh.id });
-      setMembers((allMembers as HouseholdMember[]) ?? []);
+
+      const { data: allMembers } = await supabase
+        .from('household_members')
+        .select('*')
+        .eq('household_id', hh.id);
+      setMembers(allMembers ?? []);
     } else {
       const { data: newHH, error: hhError } = await supabase
         .from('households')
@@ -98,12 +135,23 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       if (newHH) {
         await supabase
           .from('household_members')
-          .insert({ household_id: newHH.id, user_id: user.id, finance_role: 'full_access', display_name: user.email?.split('@')[0] ?? null });
+          .insert({ household_id: newHH.id, user_id: user.id, finance_role: 'full_access' });
 
         setHousehold(newHH);
-        const { data: allMembers } = await supabase.rpc('get_household_members', { p_household_id: newHH.id });
-        setMembers((allMembers as HouseholdMember[]) ?? []);
+        hhId = newHH.id;
+        const { data: allMembers } = await supabase
+          .from('household_members')
+          .select('*')
+          .eq('household_id', newHH.id);
+        setMembers(allMembers ?? []);
       }
+    }
+
+    // Fetch display names via raw REST (bypasses PostgREST schema cache)
+    if (hhId && accessToken) {
+      const names = await fetchDisplayNames(hhId, accessToken);
+      console.log('[household] display names from REST:', names);
+      setDisplayNames(names);
     }
 
     setLoading(false);
@@ -117,8 +165,8 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
 
   const householdUsers: HouseholdUser[] = members.map((m) => ({
     id: m.user_id,
-    displayName: m.display_name ?? m.user_id.slice(0, 8),
-    email: m.user_id === user?.id ? (user.email ?? '') : (m.display_name ?? m.user_id.slice(0, 8)),
+    displayName: displayNames[m.user_id] ?? m.display_name ?? m.user_id.slice(0, 8),
+    email: m.user_id === user?.id ? (user.email ?? '') : (displayNames[m.user_id] ?? m.display_name ?? m.user_id.slice(0, 8)),
   }));
 
   return (
