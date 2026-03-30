@@ -151,6 +151,26 @@ export interface Reimbursement {
   created_at: string;
 }
 
+// ---- Income (household-scoped, dynamic categories) ----
+
+export interface IncomeCategory {
+  id: string;
+  household_id: string;
+  name: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface IncomeDailyEntry {
+  id: string;
+  household_id: string;
+  date: string;
+  category_id: string;
+  amount: number;
+  notes: string | null;
+  created_at: string;
+}
+
 // ---- Investments (household-scoped) ----
 
 export interface Investment {
@@ -200,6 +220,14 @@ export const DEFAULT_NET_WORTH_ASSETS = [
   'Business Assets (MMP & Frameworks)',
   'Protocase Shares (110,000 shares)',
   'Vehicles',
+];
+
+export const DEFAULT_INCOME_CATEGORIES = [
+  'Protocase Salary',
+  'Frameworks Revenue',
+  'MMP Revenue',
+  'Reimbursements',
+  'Other',
 ];
 
 export const DEFAULT_NET_WORTH_LIABILITIES = [

@@ -22,6 +22,8 @@ import type {
   NetWorthEntry,
   Reimbursement,
   Investment,
+  IncomeCategory,
+  IncomeDailyEntry,
 } from '@/lib/types';
 import {
   TIER_LABELS,
@@ -30,6 +32,7 @@ import {
   DEFAULT_ACCOUNTS,
   DEFAULT_NET_WORTH_ASSETS,
   DEFAULT_NET_WORTH_LIABILITIES,
+  DEFAULT_INCOME_CATEGORIES,
 } from '@/lib/types';
 import {
   BarChart,
@@ -59,14 +62,18 @@ import {
   Trash2,
   Settings,
   LayoutDashboard,
+  Wallet,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
-import { FinanceOverview } from '@/components/finance-overview';
+import FinanceOverview from '@/components/finance-overview';
 
-const TABS = ['Overview', 'Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Investments'] as const;
+const TABS = ['Overview', 'Income', 'Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Investments'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_ICONS: Record<Tab, React.ReactNode> = {
   Overview: <LayoutDashboard className="w-4 h-4" />,
+  Income: <Wallet className="w-4 h-4" />,
   Budget: <DollarSign className="w-4 h-4" />,
   'Cash Flow': <TrendingUp className="w-4 h-4" />,
   Reimbursements: <Receipt className="w-4 h-4" />,
@@ -146,6 +153,71 @@ function InlineEdit({
         }
       }}
       className="px-2 py-1 bg-zinc-800 border border-blue-500 rounded text-sm text-white focus:outline-none"
+    />
+  );
+}
+
+function InlineNumberEdit({
+  value,
+  onSave,
+  className,
+  disabled,
+  format,
+}: {
+  value: number;
+  onSave: (v: number) => void;
+  className?: string;
+  disabled?: boolean;
+  format?: (v: number) => string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value.toString());
+
+  const displayValue = format ? format(value) : value.toString();
+
+  if (!editing || disabled) {
+    return (
+      <span
+        onClick={() => {
+          if (!disabled) {
+            setDraft(value.toString());
+            setEditing(true);
+          }
+        }}
+        className={cn(
+          'cursor-pointer hover:text-blue-400',
+          disabled && 'cursor-default hover:text-inherit',
+          className
+        )}
+      >
+        {displayValue}
+      </span>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      type="number"
+      step="1"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        const parsed = parseFloat(draft);
+        if (!isNaN(parsed) && parsed !== value) onSave(parsed);
+        setEditing(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          const parsed = parseFloat(draft);
+          if (!isNaN(parsed) && parsed !== value) onSave(parsed);
+          setEditing(false);
+        }
+        if (e.key === 'Escape') {
+          setDraft(value.toString());
+          setEditing(false);
+        }
+      }}
+      className="px-2 py-1 bg-zinc-800 border border-blue-500 rounded text-sm text-white focus:outline-none w-28"
     />
   );
 }
@@ -305,7 +377,10 @@ export default function FinancesPage() {
 
       {/* Tab panels */}
       {activeTab === 'Overview' && (
-        <FinanceOverview householdId={householdId} onNavigate={(tab) => setActiveTab(tab as Tab)} />
+        <FinanceOverview householdId={householdId} />
+      )}
+      {activeTab === 'Income' && (
+        <IncomeTab householdId={householdId} canEdit={canEditFinances} />
       )}
       {activeTab === 'Budget' && (
         <BudgetTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
@@ -321,6 +396,328 @@ export default function FinancesPage() {
       )}
       {activeTab === 'Investments' && (
         <InvestmentsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
+      )}
+    </div>
+  );
+}
+
+// ─── INCOME TAB ─────────────────────────────────────────────────────────────
+
+function IncomeTab({
+  householdId,
+  canEdit,
+}: {
+  householdId: string;
+  canEdit: boolean;
+}) {
+  const supabase = createClient();
+  const [saving, setSaving] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [categories, setCategories] = useState<IncomeCategory[]>([]);
+  const [entries, setEntries] = useState<IncomeDailyEntry[]>([]);
+  const [monthEntries, setMonthEntries] = useState<IncomeDailyEntry[]>([]);
+  const [date, setDate] = useState(getToday());
+  const [amounts, setAmounts] = useState<Record<string, number>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [newCatName, setNewCatName] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  const loadCategories = useCallback(async () => {
+    const { data } = await supabase
+      .from('income_categories')
+      .select('*')
+      .eq('household_id', householdId)
+      .order('sort_order');
+    if (data) setCategories(data);
+  }, [householdId]);
+
+  const loadEntriesForDate = useCallback(
+    async (d: string) => {
+      const { data } = await supabase
+        .from('income_daily')
+        .select('*')
+        .eq('household_id', householdId)
+        .eq('date', d);
+      if (data) {
+        setEntries(data);
+        const amts: Record<string, number> = {};
+        const nts: Record<string, string> = {};
+        data.forEach((e: IncomeDailyEntry) => {
+          amts[e.category_id] = e.amount;
+          nts[e.category_id] = e.notes ?? '';
+        });
+        setAmounts(amts);
+        setNotes(nts);
+      }
+    },
+    [householdId]
+  );
+
+  const loadMonthEntries = useCallback(async () => {
+    const monthStart = getMonthStart(getToday());
+    const monthEnd = getMonthEnd(getToday());
+    const { data } = await supabase
+      .from('income_daily')
+      .select('*')
+      .eq('household_id', householdId)
+      .gte('date', monthStart)
+      .lte('date', monthEnd);
+    if (data) setMonthEntries(data);
+  }, [householdId]);
+
+  const loadAll = useCallback(async () => {
+    await loadCategories();
+    await loadEntriesForDate(date);
+    await loadMonthEntries();
+  }, [loadCategories, loadEntriesForDate, date, loadMonthEntries]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  useEffect(() => {
+    loadEntriesForDate(date);
+  }, [date, loadEntriesForDate]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    for (const cat of categories) {
+      const amount = amounts[cat.id] || 0;
+      const note = notes[cat.id] || null;
+      if (amount > 0 || note) {
+        await supabase.from('income_daily').upsert(
+          {
+            household_id: householdId,
+            date,
+            category_id: cat.id,
+            amount,
+            notes: note,
+          },
+          { onConflict: 'household_id,date,category_id' }
+        );
+      }
+    }
+    await loadAll();
+    setSaving(false);
+  };
+
+  const addCategory = async () => {
+    if (!newCatName.trim()) return;
+    await supabase.from('income_categories').insert({
+      household_id: householdId,
+      name: newCatName.trim(),
+      sort_order: categories.length,
+    });
+    setNewCatName('');
+    await loadCategories();
+  };
+
+  const deleteCategory = async (catId: string) => {
+    await supabase.from('income_categories').delete().eq('id', catId);
+    setDeleteConfirm(null);
+    await loadAll();
+  };
+
+  const seedDefaults = async () => {
+    const rows = DEFAULT_INCOME_CATEGORIES.map((name, i) => ({
+      household_id: householdId,
+      name,
+      sort_order: i,
+    }));
+    await supabase.from('income_categories').insert(rows);
+    await loadAll();
+  };
+
+  const renameCategory = async (catId: string, newName: string) => {
+    await supabase.from('income_categories').update({ name: newName }).eq('id', catId);
+    await loadCategories();
+  };
+
+  const monthSumByCat = (catId: string) =>
+    monthEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
+  const monthTotal = monthEntries.reduce((s, e) => s + e.amount, 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Settings toggle */}
+      <div className="flex justify-end">
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+        >
+          <Settings className="w-4 h-4" />
+          {showSettings ? 'Hide Settings' : 'Manage Categories'}
+        </button>
+      </div>
+
+      {/* Category management */}
+      {showSettings && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Income Categories</CardTitle>
+          </CardHeader>
+
+          {categories.length === 0 && (
+            <div className="text-center py-6">
+              <p className="text-zinc-400 mb-4">No income categories yet.</p>
+              {canEdit && (
+                <button
+                  onClick={seedDefaults}
+                  className="flex items-center gap-2 mx-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Seed Defaults
+                </button>
+              )}
+            </div>
+          )}
+
+          {categories.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {categories.map((cat) => (
+                <div
+                  key={cat.id}
+                  className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
+                >
+                  <InlineEdit
+                    value={cat.name}
+                    onSave={(v) => renameCategory(cat.id, v)}
+                    className="text-sm font-medium text-white"
+                    disabled={!canEdit}
+                  />
+                  {canEdit && (
+                    <>
+                      {deleteConfirm === cat.id ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-red-400">Delete?</span>
+                          <button
+                            onClick={() => deleteCategory(cat.id)}
+                            className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm(null)}
+                            className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setDeleteConfirm(cat.id)}
+                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add new category */}
+          {canEdit && (
+            <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
+              <InputField
+                label="Category Name"
+                type="text"
+                value={newCatName}
+                onChange={setNewCatName}
+                placeholder="e.g. Consulting"
+                className="flex-1"
+              />
+              <button
+                onClick={addCategory}
+                disabled={!newCatName.trim()}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+              >
+                <Plus className="w-4 h-4" />
+                Add
+              </button>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Daily income entry */}
+      {categories.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Daily Income Entry</CardTitle>
+          </CardHeader>
+          <div className="mb-4">
+            <InputField
+              label="Date"
+              type="date"
+              value={date}
+              onChange={setDate}
+              className="w-48"
+              disabled={!canEdit}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {categories.map((cat) => (
+              <div key={cat.id} className="bg-zinc-800 rounded-lg p-3 space-y-2">
+                <div className="text-sm font-medium text-white">{cat.name}</div>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={amounts[cat.id] || ''}
+                  placeholder="0"
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setAmounts((a) => ({ ...a, [cat.id]: parseFloat(e.target.value) || 0 }))
+                  }
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <input
+                  type="text"
+                  value={notes[cat.id] || ''}
+                  placeholder="Notes (optional)"
+                  disabled={!canEdit}
+                  onChange={(e) => setNotes((n) => ({ ...n, [cat.id]: e.target.value }))}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              </div>
+            ))}
+          </div>
+          {canEdit && (
+            <div className="mt-4 flex justify-end">
+              <SaveButton saving={saving} onClick={handleSave} />
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Monthly income summary */}
+      {categories.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>This Month&apos;s Income</CardTitle>
+          </CardHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+            {categories.map((cat) => {
+              const total = monthSumByCat(cat.id);
+              return (
+                <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
+                  <div className="text-xs text-zinc-400 mb-1">{cat.name}</div>
+                  <div className="text-lg font-semibold text-white">
+                    {formatCurrency(total)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="bg-zinc-800 border border-emerald-600/30 rounded-lg p-4">
+            <div className="text-sm text-zinc-400">Total Monthly Income</div>
+            <div className="text-3xl font-bold text-emerald-400">
+              {formatCurrency(monthTotal)}
+            </div>
+          </div>
+        </Card>
       )}
     </div>
   );
@@ -351,6 +748,20 @@ function BudgetTab({
   const [newCatName, setNewCatName] = useState('');
   const [newCatAmount, setNewCatAmount] = useState(0);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
+  const [quickAddCat, setQuickAddCat] = useState<string | null>(null);
+  const [quickAddAmount, setQuickAddAmount] = useState('');
+  const [quickAddNotes, setQuickAddNotes] = useState('');
+  const [quickAddSaving, setQuickAddSaving] = useState(false);
+
+  const toggleExpanded = (catId: string) => {
+    setExpandedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(catId)) next.delete(catId);
+      else next.add(catId);
+      return next;
+    });
+  };
 
   const loadCategories = useCallback(async () => {
     const { data } = await supabase
@@ -466,6 +877,38 @@ function BudgetTab({
     setSaving(false);
   };
 
+  const handleQuickAdd = async (catId: string) => {
+    const amount = parseFloat(quickAddAmount);
+    if (isNaN(amount) || amount <= 0) return;
+    setQuickAddSaving(true);
+    const today = getToday();
+    // Fetch existing entry for today + this category to add to it
+    const { data: existing } = await supabase
+      .from('budget_daily')
+      .select('amount')
+      .eq('household_id', householdId)
+      .eq('date', today)
+      .eq('category_id', catId)
+      .maybeSingle();
+    const existingAmount = existing?.amount || 0;
+    await supabase.from('budget_daily').upsert(
+      {
+        user_id: userId,
+        household_id: householdId,
+        date: today,
+        category_id: catId,
+        amount: existingAmount + amount,
+        notes: quickAddNotes || null,
+      },
+      { onConflict: 'household_id,date,category_id' }
+    );
+    setQuickAddCat(null);
+    setQuickAddAmount('');
+    setQuickAddNotes('');
+    setQuickAddSaving(false);
+    await loadAll();
+  };
+
   const addCategory = async () => {
     if (!newCatName.trim() || newCatAmount <= 0) return;
     await supabase.from('budget_categories').insert({
@@ -513,10 +956,28 @@ function BudgetTab({
 
   const weekSumByCat = (catId: string) =>
     weekEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
+  const weekEntriesByCat = (catId: string) =>
+    weekEntries.filter((e) => e.category_id === catId && e.amount > 0).sort((a, b) => a.date.localeCompare(b.date));
   const monthSumByCat = (catId: string) =>
     monthEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
   const todaySumByCat = (catId: string) =>
     entries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
+
+  const getBudgetColor = (spent: number, target: number) => {
+    if (target <= 0) return 'text-white';
+    const pct = spent / target;
+    if (pct > 1) return 'text-red-400';
+    if (pct >= 0.9) return 'text-amber-400';
+    return 'text-emerald-400';
+  };
+
+  const getBudgetBarColor = (spent: number, target: number) => {
+    if (target <= 0) return 'bg-blue-500';
+    const pct = spent / target;
+    if (pct > 1) return 'bg-red-500';
+    if (pct >= 0.9) return 'bg-amber-500';
+    return 'bg-emerald-500';
+  };
 
   return (
     <div className="space-y-6">
@@ -560,17 +1021,21 @@ function BudgetTab({
                   key={cat.id}
                   className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
                 >
-                  <div>
+                  <div className="flex items-center gap-3">
                     <InlineEdit
                       value={cat.name}
                       onSave={(v) => renameCategory(cat.id, v)}
                       className="text-sm font-medium text-white"
                       disabled={!canEdit}
                     />
-                    <span className="text-xs text-zinc-400 ml-3">
-                      {formatCurrency(cat.monthly_amount)}/mo
-                    </span>
-                    <span className="text-xs text-zinc-500 ml-2">
+                    <InlineNumberEdit
+                      value={cat.monthly_amount}
+                      onSave={(v) => updateCategoryAmount(cat.id, v)}
+                      className="text-xs text-zinc-400"
+                      disabled={!canEdit}
+                      format={(v) => `${formatCurrency(v)}/mo`}
+                    />
+                    <span className="text-xs text-zinc-500">
                       ({formatCurrency(Math.round(cat.monthly_amount / 4.333))}/wk)
                     </span>
                   </div>
@@ -688,68 +1153,127 @@ function BudgetTab({
         </Card>
       )}
 
-      {/* Dashboard: Today */}
-      {categories.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Today</CardTitle>
-          </CardHeader>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-            {categories.map((cat) => {
-              const spent = todaySumByCat(cat.id);
-              return (
-                <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
-                  <div className="text-xs text-zinc-400 mb-1">{cat.name}</div>
-                  <div className="text-lg font-semibold text-white">
-                    {formatCurrency(spent)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
-
-      {/* Dashboard: This Week */}
+      {/* This Week - with expandable daily entries and quick add */}
       {categories.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>This Week (Mon-Sun)</CardTitle>
           </CardHeader>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="space-y-3">
             {categories.map((cat) => {
               const spent = weekSumByCat(cat.id);
               const weeklyBudget = Math.round(cat.monthly_amount / 4.333);
               const pct = weeklyBudget > 0 ? Math.round((spent / weeklyBudget) * 100) : 0;
-              const over = spent > weeklyBudget;
+              const isExpanded = expandedCats.has(cat.id);
+              const dailyEntries = weekEntriesByCat(cat.id);
+              const budgetColor = getBudgetColor(spent, weeklyBudget);
+              const barColor = getBudgetBarColor(spent, weeklyBudget);
+
               return (
                 <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-zinc-400">{cat.name}</span>
-                    <span className="text-xs text-zinc-500">
-                      {formatCurrency(weeklyBudget)}/wk
-                    </span>
-                  </div>
-                  <div className="text-lg font-semibold text-white mb-1">
-                    {formatCurrency(spent)}
-                  </div>
-                  <div className="w-full bg-zinc-700 rounded-full h-2">
-                    <div
-                      className={cn(
-                        'h-2 rounded-full transition-all',
-                        over ? 'bg-red-500' : 'bg-emerald-500'
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => toggleExpanded(cat.id)}
+                        className="text-zinc-400 hover:text-white transition-colors"
+                      >
+                        {isExpanded ? (
+                          <ChevronDown className="w-4 h-4" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4" />
+                        )}
+                      </button>
+                      <span className="text-sm font-medium text-white">{cat.name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={cn('text-sm font-semibold', budgetColor)}>
+                        {formatCurrency(spent)} / {formatCurrency(weeklyBudget)}
+                      </span>
+                      {canEdit && (
+                        <button
+                          onClick={() => setQuickAddCat(quickAddCat === cat.id ? null : cat.id)}
+                          className="p-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-400 hover:text-white transition-colors"
+                          title="Quick add today's spending"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
                       )}
+                    </div>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div className="w-full bg-zinc-700 rounded-full h-2 mb-1">
+                    <div
+                      className={cn('h-2 rounded-full transition-all', barColor)}
                       style={{ width: `${Math.min(pct, 100)}%` }}
                     />
                   </div>
-                  <div
-                    className={cn(
-                      'text-xs mt-1',
-                      over ? 'text-red-400' : 'text-emerald-400'
-                    )}
-                  >
+                  <div className={cn('text-xs', budgetColor)}>
                     {pct}% of weekly budget
                   </div>
+
+                  {/* Quick add inline form */}
+                  {quickAddCat === cat.id && (
+                    <div className="mt-2 pt-2 border-t border-zinc-700 flex items-end gap-2">
+                      <InputField
+                        label="Amount ($)"
+                        value={quickAddAmount}
+                        step="0.01"
+                        placeholder="0.00"
+                        onChange={setQuickAddAmount}
+                        className="w-28"
+                      />
+                      <InputField
+                        label="Notes"
+                        type="text"
+                        value={quickAddNotes}
+                        placeholder="Optional"
+                        onChange={setQuickAddNotes}
+                        className="flex-1"
+                      />
+                      <button
+                        onClick={() => handleQuickAdd(cat.id)}
+                        disabled={quickAddSaving || !quickAddAmount || parseFloat(quickAddAmount) <= 0}
+                        className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-xs font-medium transition-colors h-[38px]"
+                      >
+                        {quickAddSaving ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Check className="w-3 h-3" />
+                        )}
+                        Add
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Expandable daily entries */}
+                  {isExpanded && dailyEntries.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-zinc-700 space-y-1">
+                      {dailyEntries.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className="flex items-center justify-between text-xs py-1"
+                        >
+                          <span className="text-zinc-400">{formatDate(entry.date)}</span>
+                          <div className="flex items-center gap-2">
+                            {entry.notes && (
+                              <span className="text-zinc-500 truncate max-w-[150px]">
+                                {entry.notes}
+                              </span>
+                            )}
+                            <span className="text-white font-medium">
+                              {formatCurrency(entry.amount)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {isExpanded && dailyEntries.length === 0 && (
+                    <div className="mt-2 pt-2 border-t border-zinc-700 text-xs text-zinc-500">
+                      No entries this week.
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -770,7 +1294,8 @@ function BudgetTab({
                 cat.monthly_amount > 0
                   ? Math.round((spent / cat.monthly_amount) * 100)
                   : 0;
-              const over = spent > cat.monthly_amount;
+              const budgetColor = getBudgetColor(spent, cat.monthly_amount);
+              const barColor = getBudgetBarColor(spent, cat.monthly_amount);
               return (
                 <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-1">
@@ -779,24 +1304,16 @@ function BudgetTab({
                       {formatCurrency(cat.monthly_amount)}/mo
                     </span>
                   </div>
-                  <div className="text-lg font-semibold text-white mb-1">
+                  <div className={cn('text-lg font-semibold mb-1', budgetColor)}>
                     {formatCurrency(spent)}
                   </div>
                   <div className="w-full bg-zinc-700 rounded-full h-2">
                     <div
-                      className={cn(
-                        'h-2 rounded-full transition-all',
-                        over ? 'bg-red-500' : 'bg-emerald-500'
-                      )}
+                      className={cn('h-2 rounded-full transition-all', barColor)}
                       style={{ width: `${Math.min(pct, 100)}%` }}
                     />
                   </div>
-                  <div
-                    className={cn(
-                      'text-xs mt-1',
-                      over ? 'text-red-400' : 'text-emerald-400'
-                    )}
-                  >
+                  <div className={cn('text-xs mt-1', budgetColor)}>
                     {pct}% of monthly budget
                   </div>
                 </div>

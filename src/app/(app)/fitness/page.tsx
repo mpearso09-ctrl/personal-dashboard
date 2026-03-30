@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import type { FitnessDaily, FitnessWeekly, FitnessGoals } from '@/lib/types';
 import { getToday, getWeekStart, getDayOfChallenge, getStatusColor, cn, formatDate } from '@/lib/utils';
@@ -10,7 +10,7 @@ import { useHousehold } from '@/components/household-provider';
 import {
   Dumbbell, Footprints, Moon, Flame, Beef, Wheat, Droplets, Salad,
   Save, Check, X, ChevronLeft, ChevronRight, Calendar, Weight,
-  TrendingUp, Activity, Target, ClipboardList, BarChart3, Camera,
+  TrendingUp, Activity, Target, ClipboardList, BarChart3, Camera, Plus,
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -21,15 +21,19 @@ import {
 // Field definitions
 // ---------------------------------------------------------------------------
 
+const CUMULATIVE_FIELDS = new Set([
+  'calories_consumed', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'steps',
+]);
+
 const dailyFields = [
-  { name: 'calories_consumed', label: 'Calories', type: 'number', icon: Flame, goalMin: undefined as string | undefined, goalMax: 'calories_max' as string | undefined },
-  { name: 'protein_g', label: 'Protein (g)', type: 'number', icon: Beef, goalMin: 'protein_min', goalMax: undefined },
-  { name: 'carbs_g', label: 'Carbs (g)', type: 'number', icon: Wheat, goalMin: 'carbs_min', goalMax: 'carbs_max' },
-  { name: 'fat_g', label: 'Fat (g)', type: 'number', icon: Droplets, goalMin: 'fat_min', goalMax: 'fat_max' },
-  { name: 'fiber_g', label: 'Fiber (g)', type: 'number', icon: Salad, goalMin: 'fiber_min', goalMax: 'fiber_max' },
-  { name: 'steps', label: 'Steps', type: 'number', icon: Footprints, goalMin: 'steps_min', goalMax: undefined },
-  { name: 'sleep_hours', label: 'Sleep (hrs)', type: 'number', icon: Moon, goalMin: 'sleep_min', goalMax: undefined },
-  { name: 'calories_burned', label: 'Calories Burned', type: 'number', icon: Activity, goalMin: 'calories_burned_min', goalMax: undefined },
+  { name: 'calories_consumed', label: 'Calories', type: 'number', icon: Flame, goalMin: undefined as string | undefined, goalMax: 'calories_max' as string | undefined, unit: '' },
+  { name: 'protein_g', label: 'Protein', type: 'number', icon: Beef, goalMin: 'protein_min', goalMax: undefined, unit: 'g' },
+  { name: 'carbs_g', label: 'Carbs', type: 'number', icon: Wheat, goalMin: 'carbs_min', goalMax: 'carbs_max', unit: 'g' },
+  { name: 'fat_g', label: 'Fat', type: 'number', icon: Droplets, goalMin: 'fat_min', goalMax: 'fat_max', unit: 'g' },
+  { name: 'fiber_g', label: 'Fiber', type: 'number', icon: Salad, goalMin: 'fiber_min', goalMax: 'fiber_max', unit: 'g' },
+  { name: 'steps', label: 'Steps', type: 'number', icon: Footprints, goalMin: 'steps_min', goalMax: undefined, unit: '' },
+  { name: 'sleep_hours', label: 'Sleep (hrs)', type: 'number', icon: Moon, goalMin: 'sleep_min', goalMax: undefined, unit: '' },
+  { name: 'calories_burned', label: 'Cals Burned', type: 'number', icon: Activity, goalMin: 'calories_burned_min', goalMax: undefined, unit: '' },
 ];
 
 const toggleFields = [
@@ -59,6 +63,12 @@ function shiftDate(date: string, days: number): string {
   const d = new Date(date + 'T00:00:00');
   d.setDate(d.getDate() + days);
   return d.toISOString().split('T')[0];
+}
+
+function formatTotal(value: number | null | undefined, unit: string): string {
+  if (value === null || value === undefined) return `0${unit}`;
+  if (unit === '' && value >= 1000) return value.toLocaleString();
+  return `${value}${unit}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +110,9 @@ export default function FitnessPage() {
     weight_lbs: null,
     body_fat_pct: null,
   });
+
+  // State for the "add amount" inputs on cumulative fields
+  const [addAmounts, setAddAmounts] = useState<Record<string, string>>({});
 
   // --- weekly tab ---
   const [weeklyDate, setWeeklyDate] = useState(() => {
@@ -145,6 +158,8 @@ export default function FitnessPage() {
     } else {
       setDailyForm({ workout: false, mobility: false, training_quality: null, notes: '', weight_lbs: null, body_fat_pct: null });
     }
+    // Clear add amounts when switching dates or reloading
+    setAddAmounts({});
   }, [user, selectedDate, effectiveUserId]);
 
   const fetchWeekly = useCallback(async () => {
@@ -243,29 +258,29 @@ export default function FitnessPage() {
     setTimeout(() => setSaveMessage(''), 2500);
   };
 
-  const saveDaily = async () => {
+  /** Build the full daily payload from current form state and upsert. */
+  const upsertDaily = async (formOverrides?: Partial<FitnessDaily>) => {
     if (!user) return;
-    setSaving(true);
+    const merged = { ...dailyForm, ...formOverrides };
     const payload: Record<string, unknown> = {
       user_id: user.id,
       date: selectedDate,
     };
     dailyFields.forEach((f) => {
-      const v = (dailyForm as Record<string, unknown>)[f.name];
+      const v = (merged as Record<string, unknown>)[f.name];
       payload[f.name] = v === '' || v === undefined ? null : Number(v);
     });
     toggleFields.forEach((f) => {
-      payload[f.name] = !!(dailyForm as Record<string, unknown>)[f.name];
+      payload[f.name] = !!(merged as Record<string, unknown>)[f.name];
     });
     payload.training_quality =
-      dailyForm.training_quality === null || dailyForm.training_quality === undefined
+      merged.training_quality === null || merged.training_quality === undefined
         ? null
-        : Number(dailyForm.training_quality);
-    payload.notes = dailyForm.notes || null;
+        : Number(merged.training_quality);
+    payload.notes = merged.notes || null;
 
-    // Weight and body fat now live on fitness_daily
-    const weightVal = dailyForm.weight_lbs;
-    const bfVal = dailyForm.body_fat_pct;
+    const weightVal = merged.weight_lbs;
+    const bfVal = merged.body_fat_pct;
     payload.weight_lbs = weightVal === null || weightVal === undefined || weightVal === ('' as unknown) ? null : Number(weightVal);
     payload.body_fat_pct = bfVal === null || bfVal === undefined || bfVal === ('' as unknown) ? null : Number(bfVal);
 
@@ -273,6 +288,35 @@ export default function FitnessPage() {
       .from('fitness_daily')
       .upsert(payload, { onConflict: 'user_id,date' });
 
+    return error;
+  };
+
+  const saveDaily = async () => {
+    if (!user) return;
+    setSaving(true);
+    const error = await upsertDaily();
+    setSaving(false);
+    flash(error ? `Error: ${error.message}` : 'Saved!');
+  };
+
+  /** Add a value to a cumulative field and immediately save. */
+  const addToCumulative = async (fieldName: string) => {
+    if (!user || isViewingOther) return;
+    const amountStr = addAmounts[fieldName];
+    const amount = Number(amountStr);
+    if (!amountStr || isNaN(amount) || amount === 0) return;
+
+    const currentVal = ((dailyForm as Record<string, unknown>)[fieldName] as number | null) ?? 0;
+    const newVal = currentVal + amount;
+
+    // Update local state immediately
+    const updatedForm = { ...dailyForm, [fieldName]: newVal };
+    setDailyForm(updatedForm);
+    setAddAmounts((prev) => ({ ...prev, [fieldName]: '' }));
+
+    // Save to Supabase
+    setSaving(true);
+    const error = await upsertDaily({ [fieldName]: newVal } as Partial<FitnessDaily>);
     setSaving(false);
     flash(error ? `Error: ${error.message}` : 'Saved!');
   };
@@ -355,225 +399,310 @@ export default function FitnessPage() {
   // Sub-renders
   // =========================================================================
 
-  const renderTodayTab = () => (
-    <div className="space-y-6">
-      {/* Challenge banner */}
-      {goals && challengeDay !== null && (
-        <div className="flex items-center gap-3 bg-blue-600/20 border border-blue-600/40 rounded-lg px-4 py-3">
-          <Target className="h-5 w-5 text-blue-400" />
-          <span className="text-blue-300 font-medium">
-            {goals.challenge_name}: Day {challengeDay} of {goals.challenge_days}
-          </span>
-        </div>
-      )}
+  const renderTodayTab = () => {
+    const cumulativeFields = dailyFields.filter((f) => CUMULATIVE_FIELDS.has(f.name));
+    const directFields = dailyFields.filter((f) => !CUMULATIVE_FIELDS.has(f.name));
 
-      {/* Date selector */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
-          className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </button>
-        <input
-          type="date"
-          value={selectedDate}
-          onChange={(e) => setSelectedDate(e.target.value)}
-          className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm"
-        />
-        <button
-          onClick={() => setSelectedDate(shiftDate(selectedDate, 1))}
-          className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
-        <button
-          onClick={() => setSelectedDate(getToday())}
-          className="text-sm text-blue-400 hover:text-blue-300 ml-2"
-        >
-          Today
-        </button>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Daily Entry &mdash; {formatDate(selectedDate)}</CardTitle>
-        </CardHeader>
-
-        {/* Weight & Body Fat (optional, at the top) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 text-sm text-zinc-400">
-              <Weight className="h-4 w-4" />
-              Weight (lbs)
-              {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_weight})</span>}
-            </label>
-            <input
-              type="number"
-              step="0.1"
-              value={dailyForm.weight_lbs ?? ''}
-              onChange={(e) =>
-                setDailyForm((prev) => ({
-                  ...prev,
-                  weight_lbs: e.target.value === '' ? null : Number(e.target.value),
-                }))
-              }
-              disabled={isViewingOther}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
-              placeholder="— (optional)"
-            />
+    return (
+      <div className="space-y-6">
+        {/* Challenge banner */}
+        {goals && challengeDay !== null && (
+          <div className="flex items-center gap-3 bg-blue-600/20 border border-blue-600/40 rounded-lg px-4 py-3">
+            <Target className="h-5 w-5 text-blue-400" />
+            <span className="text-blue-300 font-medium">
+              {goals.challenge_name}: Day {challengeDay} of {goals.challenge_days}
+            </span>
           </div>
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 text-sm text-zinc-400">
-              <TrendingUp className="h-4 w-4" />
-              Body Fat %
-              {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_body_fat}%)</span>}
-            </label>
-            <input
-              type="number"
-              step="0.1"
-              value={dailyForm.body_fat_pct ?? ''}
-              onChange={(e) =>
-                setDailyForm((prev) => ({
-                  ...prev,
-                  body_fat_pct: e.target.value === '' ? null : Number(e.target.value),
-                }))
-              }
-              disabled={isViewingOther}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
-              placeholder="— (optional)"
-            />
-          </div>
+        )}
+
+        {/* Date selector */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
+            className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm"
+          />
+          <button
+            onClick={() => setSelectedDate(shiftDate(selectedDate, 1))}
+            className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setSelectedDate(getToday())}
+            className="text-sm text-blue-400 hover:text-blue-300 ml-2"
+          >
+            Today
+          </button>
         </div>
 
-        {/* Numeric fields */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {dailyFields.map((f) => {
-            const val = (dailyForm as Record<string, unknown>)[f.name] as number | null;
-            const min = f.goalMin ? goalValue(f.goalMin) : undefined;
-            const max = f.goalMax ? goalValue(f.goalMax) : undefined;
-            const color = getStatusColor(val !== null && val !== undefined ? Number(val) : null, min, max);
-            const Icon = f.icon;
-            return (
-              <div key={f.name} className="space-y-1">
-                <label className="flex items-center gap-2 text-sm text-zinc-400">
-                  <Icon className="h-4 w-4" />
-                  {f.label}
-                  {min !== undefined && max !== undefined && (
-                    <span className="text-xs text-zinc-500">({min}-{max})</span>
-                  )}
-                  {min !== undefined && max === undefined && (
-                    <span className="text-xs text-zinc-500">(min {min})</span>
-                  )}
-                  {max !== undefined && min === undefined && (
-                    <span className="text-xs text-zinc-500">(max {max})</span>
-                  )}
-                </label>
-                <input
-                  type="number"
-                  value={val ?? ''}
-                  onChange={(e) =>
+        <Card>
+          <CardHeader>
+            <CardTitle>Daily Entry &mdash; {formatDate(selectedDate)}</CardTitle>
+          </CardHeader>
+
+          {/* Weight & Body Fat (optional, at the top) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 text-sm text-zinc-400">
+                <Weight className="h-4 w-4" />
+                Weight (lbs)
+                {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_weight})</span>}
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={dailyForm.weight_lbs ?? ''}
+                onChange={(e) =>
+                  setDailyForm((prev) => ({
+                    ...prev,
+                    weight_lbs: e.target.value === '' ? null : Number(e.target.value),
+                  }))
+                }
+                disabled={isViewingOther}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
+                placeholder="-- (optional)"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 text-sm text-zinc-400">
+                <TrendingUp className="h-4 w-4" />
+                Body Fat %
+                {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_body_fat}%)</span>}
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={dailyForm.body_fat_pct ?? ''}
+                onChange={(e) =>
+                  setDailyForm((prev) => ({
+                    ...prev,
+                    body_fat_pct: e.target.value === '' ? null : Number(e.target.value),
+                  }))
+                }
+                disabled={isViewingOther}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
+                placeholder="-- (optional)"
+              />
+            </div>
+          </div>
+
+          {/* Cumulative fields — total + add input + button */}
+          <div className="mb-6">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">
+              Nutrition &amp; Activity
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {cumulativeFields.map((f) => {
+                const val = (dailyForm as Record<string, unknown>)[f.name] as number | null;
+                const min = f.goalMin ? goalValue(f.goalMin) : undefined;
+                const max = f.goalMax ? goalValue(f.goalMax) : undefined;
+                const color = getStatusColor(val !== null && val !== undefined ? Number(val) : null, min, max);
+                const Icon = f.icon;
+                const addVal = addAmounts[f.name] ?? '';
+
+                return (
+                  <div
+                    key={f.name}
+                    className="flex items-center gap-3 bg-zinc-800/50 border border-zinc-700/50 rounded-lg px-3 py-2.5"
+                  >
+                    {/* Icon + label */}
+                    <div className="flex items-center gap-2 min-w-0 shrink-0">
+                      <Icon className="h-4 w-4 text-zinc-400 shrink-0" />
+                      <span className="text-sm text-zinc-400 whitespace-nowrap">{f.label}</span>
+                    </div>
+
+                    {/* Current total */}
+                    <span className={cn('text-lg font-semibold tabular-nums min-w-[4rem] text-right', color || 'text-white')}>
+                      {formatTotal(val, f.unit)}
+                    </span>
+
+                    {/* Add input + button (hidden when viewing other user) */}
+                    {!isViewingOther && (
+                      <div className="flex items-center gap-1 ml-auto shrink-0">
+                        <input
+                          type="number"
+                          value={addVal}
+                          onChange={(e) =>
+                            setAddAmounts((prev) => ({ ...prev, [f.name]: e.target.value }))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              addToCumulative(f.name);
+                            }
+                          }}
+                          className="w-20 bg-zinc-900 border border-zinc-600 rounded px-2 py-1 text-sm text-white text-right placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none"
+                          placeholder="0"
+                        />
+                        <button
+                          onClick={() => addToCumulative(f.name)}
+                          disabled={saving || !addVal}
+                          className="flex items-center justify-center h-7 w-7 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:hover:bg-blue-600 text-white transition-colors shrink-0"
+                          title={`Add to ${f.label}`}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {/* Goal range hints */}
+            <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2">
+              {cumulativeFields.map((f) => {
+                const min = f.goalMin ? goalValue(f.goalMin) : undefined;
+                const max = f.goalMax ? goalValue(f.goalMax) : undefined;
+                if (min === undefined && max === undefined) return null;
+                return (
+                  <span key={f.name} className="text-xs text-zinc-500">
+                    {f.label}:{' '}
+                    {min !== undefined && max !== undefined && `${min}-${max}`}
+                    {min !== undefined && max === undefined && `min ${min}`}
+                    {max !== undefined && min === undefined && `max ${max}`}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Non-cumulative numeric fields (sleep, calories burned) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {directFields.map((f) => {
+              const val = (dailyForm as Record<string, unknown>)[f.name] as number | null;
+              const min = f.goalMin ? goalValue(f.goalMin) : undefined;
+              const max = f.goalMax ? goalValue(f.goalMax) : undefined;
+              const color = getStatusColor(val !== null && val !== undefined ? Number(val) : null, min, max);
+              const Icon = f.icon;
+              return (
+                <div key={f.name} className="space-y-1">
+                  <label className="flex items-center gap-2 text-sm text-zinc-400">
+                    <Icon className="h-4 w-4" />
+                    {f.label}
+                    {min !== undefined && max !== undefined && (
+                      <span className="text-xs text-zinc-500">({min}-{max})</span>
+                    )}
+                    {min !== undefined && max === undefined && (
+                      <span className="text-xs text-zinc-500">(min {min})</span>
+                    )}
+                    {max !== undefined && min === undefined && (
+                      <span className="text-xs text-zinc-500">(max {max})</span>
+                    )}
+                  </label>
+                  <input
+                    type="number"
+                    value={val ?? ''}
+                    onChange={(e) =>
+                      setDailyForm((prev) => ({
+                        ...prev,
+                        [f.name]: e.target.value === '' ? null : e.target.value,
+                      }))
+                    }
+                    disabled={isViewingOther}
+                    className={cn(
+                      'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm disabled:opacity-50',
+                      color
+                    )}
+                    placeholder="--"
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Toggle fields */}
+          <div className="flex flex-wrap gap-4 mt-6">
+            {toggleFields.map((f) => {
+              const checked = !!(dailyForm as Record<string, unknown>)[f.name];
+              return (
+                <button
+                  key={f.name}
+                  onClick={() =>
                     setDailyForm((prev) => ({
                       ...prev,
-                      [f.name]: e.target.value === '' ? null : e.target.value,
+                      [f.name]: !checked,
                     }))
                   }
                   disabled={isViewingOther}
                   className={cn(
-                    'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm disabled:opacity-50',
-                    color
+                    'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50',
+                    checked
+                      ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
+                      : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600'
                   )}
-                  placeholder="—"
-                />
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Toggle fields */}
-        <div className="flex flex-wrap gap-4 mt-6">
-          {toggleFields.map((f) => {
-            const checked = !!(dailyForm as Record<string, unknown>)[f.name];
-            return (
-              <button
-                key={f.name}
-                onClick={() =>
-                  setDailyForm((prev) => ({
-                    ...prev,
-                    [f.name]: !checked,
-                  }))
-                }
-                disabled={isViewingOther}
-                className={cn(
-                  'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50',
-                  checked
-                    ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
-                    : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600'
-                )}
-              >
-                {checked ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
-                {f.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Training quality slider */}
-        <div className="mt-6 space-y-2">
-          <label className="flex items-center gap-2 text-sm text-zinc-400">
-            <Dumbbell className="h-4 w-4" />
-            Training Quality: {dailyForm.training_quality ?? '—'} / 10
-          </label>
-          <input
-            type="range"
-            min="1"
-            max="10"
-            value={dailyForm.training_quality ?? 5}
-            onChange={(e) =>
-              setDailyForm((prev) => ({
-                ...prev,
-                training_quality: Number(e.target.value),
-              }))
-            }
-            disabled={isViewingOther}
-            className="w-full max-w-sm accent-blue-500 disabled:opacity-50"
-          />
-        </div>
-
-        {/* Notes */}
-        <div className="mt-6 space-y-1">
-          <label className="text-sm text-zinc-400">Notes</label>
-          <textarea
-            value={dailyForm.notes ?? ''}
-            onChange={(e) => setDailyForm((prev) => ({ ...prev, notes: e.target.value }))}
-            rows={2}
-            disabled={isViewingOther}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white resize-none disabled:opacity-50"
-            placeholder="Optional notes..."
-          />
-        </div>
-
-        {/* Save */}
-        {!isViewingOther && (
-          <div className="mt-6 flex items-center gap-3">
-            <button
-              onClick={saveDaily}
-              disabled={saving}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
-            >
-              <Save className="h-4 w-4" />
-              {saving ? 'Saving...' : 'Save Entry'}
-            </button>
-            {saveMessage && (
-              <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
-                {saveMessage}
-              </span>
-            )}
+                >
+                  {checked ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+                  {f.label}
+                </button>
+              );
+            })}
           </div>
-        )}
-      </Card>
-    </div>
-  );
+
+          {/* Training quality slider */}
+          <div className="mt-6 space-y-2">
+            <label className="flex items-center gap-2 text-sm text-zinc-400">
+              <Dumbbell className="h-4 w-4" />
+              Training Quality: {dailyForm.training_quality ?? '--'} / 10
+            </label>
+            <input
+              type="range"
+              min="1"
+              max="10"
+              value={dailyForm.training_quality ?? 5}
+              onChange={(e) =>
+                setDailyForm((prev) => ({
+                  ...prev,
+                  training_quality: Number(e.target.value),
+                }))
+              }
+              disabled={isViewingOther}
+              className="w-full max-w-sm accent-blue-500 disabled:opacity-50"
+            />
+          </div>
+
+          {/* Notes */}
+          <div className="mt-6 space-y-1">
+            <label className="text-sm text-zinc-400">Notes</label>
+            <textarea
+              value={dailyForm.notes ?? ''}
+              onChange={(e) => setDailyForm((prev) => ({ ...prev, notes: e.target.value }))}
+              rows={2}
+              disabled={isViewingOther}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white resize-none disabled:opacity-50"
+              placeholder="Optional notes..."
+            />
+          </div>
+
+          {/* Save */}
+          {!isViewingOther && (
+            <div className="mt-6 flex items-center gap-3">
+              <button
+                onClick={saveDaily}
+                disabled={saving}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                <Save className="h-4 w-4" />
+                {saving ? 'Saving...' : 'Save Entry'}
+              </button>
+              {saveMessage && (
+                <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
+                  {saveMessage}
+                </span>
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  };
 
   const renderWeeklyTab = () => {
     const mondays = getPreviousMondays(8);
@@ -669,22 +798,22 @@ export default function FitnessPage() {
               <tr key={entry.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
                 <td className="py-2 px-2 text-zinc-300">{formatDate(entry.date)}</td>
                 <td className="text-right py-2 px-2 text-zinc-300">
-                  {entry.weight_lbs ?? '—'}
+                  {entry.weight_lbs ?? '--'}
                 </td>
                 <td className="text-right py-2 px-2 text-zinc-300">
-                  {entry.body_fat_pct != null ? `${entry.body_fat_pct}%` : '—'}
+                  {entry.body_fat_pct != null ? `${entry.body_fat_pct}%` : '--'}
                 </td>
                 <td className={cn('text-right py-2 px-2', getStatusColor(entry.calories_consumed, undefined, goalValue('calories_max')))}>
-                  {entry.calories_consumed ?? '—'}
+                  {entry.calories_consumed ?? '--'}
                 </td>
                 <td className={cn('text-right py-2 px-2', getStatusColor(entry.protein_g, goalValue('protein_min')))}>
-                  {entry.protein_g ?? '—'}
+                  {entry.protein_g ?? '--'}
                 </td>
                 <td className={cn('text-right py-2 px-2', getStatusColor(entry.steps, goalValue('steps_min')))}>
-                  {entry.steps != null ? entry.steps.toLocaleString() : '—'}
+                  {entry.steps != null ? entry.steps.toLocaleString() : '--'}
                 </td>
                 <td className={cn('text-right py-2 px-2', getStatusColor(entry.sleep_hours, goalValue('sleep_min')))}>
-                  {entry.sleep_hours ?? '—'}
+                  {entry.sleep_hours ?? '--'}
                 </td>
                 <td className="text-center py-2 px-2">
                   {entry.workout ? (
@@ -694,7 +823,7 @@ export default function FitnessPage() {
                   )}
                 </td>
                 <td className="text-right py-2 px-2 text-zinc-300">
-                  {entry.training_quality ?? '—'}
+                  {entry.training_quality ?? '--'}
                 </td>
               </tr>
             ))}
