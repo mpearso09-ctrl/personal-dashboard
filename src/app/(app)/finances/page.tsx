@@ -47,6 +47,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  CartesianGrid,
 } from 'recharts';
 import {
   DollarSign,
@@ -403,6 +404,53 @@ export default function FinancesPage() {
 
 // ─── INCOME TAB ─────────────────────────────────────────────────────────────
 
+// Helper: get Monday of the week containing `date` (ISO string)
+function getMondayOfWeek(date: string): string {
+  const d = new Date(date + 'T00:00:00');
+  const day = d.getDay(); // 0=Sun … 6=Sat
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().split('T')[0];
+}
+
+// Helper: format a Mon–Sun range for display
+function formatWeekLabel(monday: string): string {
+  const start = new Date(monday + 'T00:00:00');
+  const end = new Date(monday + 'T00:00:00');
+  end.setDate(end.getDate() + 6);
+  const fmt = (d: Date) =>
+    d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
+// Generate list of past N week-Monday strings (most-recent first)
+function getPastWeekMondays(n: number): string[] {
+  const mondays: string[] = [];
+  const today = getToday();
+  let mon = getMondayOfWeek(today);
+  for (let i = 0; i < n; i++) {
+    mondays.push(mon);
+    const d = new Date(mon + 'T00:00:00');
+    d.setDate(d.getDate() - 7);
+    mon = d.toISOString().split('T')[0];
+  }
+  return mondays;
+}
+
+// ─── Get 3 month labels (most-recent last)
+function getLast3Months(): { label: string; start: string; end: string }[] {
+  const result = [];
+  const today = new Date();
+  for (let i = 2; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const start = d.toISOString().split('T')[0];
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
+    const label = d.toLocaleDateString('en-CA', { month: 'short', year: '2-digit' });
+    result.push({ label, start, end });
+  }
+  return result;
+}
+
 function IncomeTab({
   householdId,
   canEdit,
@@ -411,16 +459,22 @@ function IncomeTab({
   canEdit: boolean;
 }) {
   const supabase = createClient();
-  const [saving, setSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [categories, setCategories] = useState<IncomeCategory[]>([]);
-  const [entries, setEntries] = useState<IncomeDailyEntry[]>([]);
-  const [monthEntries, setMonthEntries] = useState<IncomeDailyEntry[]>([]);
-  const [date, setDate] = useState(getToday());
-  const [amounts, setAmounts] = useState<Record<string, number>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
-  const [newCatName, setNewCatName] = useState('');
+  const [weekEntries, setWeekEntries] = useState<IncomeDailyEntry[]>([]);
+  const [todayEntries, setTodayEntries] = useState<IncomeDailyEntry[]>([]);
+  const [chartEntries, setChartEntries] = useState<IncomeDailyEntry[]>([]);
+  const [selectedWeek, setSelectedWeek] = useState<string>(() => getMondayOfWeek(getToday()));
+  const [openCategoryId, setOpenCategoryId] = useState<string | null>(null);
+  const [addAmounts, setAddAmounts] = useState<Record<string, string>>({});
+  const [addNotes, setAddNotes] = useState<Record<string, string>>({});
+  const [addSaving, setAddSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [newCatName, setNewCatName] = useState('');
+
+  const weekMondays = getPastWeekMondays(12);
+  const today = getToday();
+  const weekEnd = getWeekEnd(selectedWeek);
 
   const loadCategories = useCallback(async () => {
     const { data } = await supabase
@@ -431,74 +485,97 @@ function IncomeTab({
     if (data) setCategories(data);
   }, [householdId]);
 
-  const loadEntriesForDate = useCallback(
-    async (d: string) => {
-      const { data } = await supabase
-        .from('income_daily')
-        .select('*')
-        .eq('household_id', householdId)
-        .eq('date', d);
-      if (data) {
-        setEntries(data);
-        const amts: Record<string, number> = {};
-        const nts: Record<string, string> = {};
-        data.forEach((e: IncomeDailyEntry) => {
-          amts[e.category_id] = e.amount;
-          nts[e.category_id] = e.notes ?? '';
-        });
-        setAmounts(amts);
-        setNotes(nts);
-      }
-    },
-    [householdId]
-  );
-
-  const loadMonthEntries = useCallback(async () => {
-    const monthStart = getMonthStart(getToday());
-    const monthEnd = getMonthEnd(getToday());
+  const loadWeekEntries = useCallback(async (monday: string) => {
+    const end = getWeekEnd(monday);
     const { data } = await supabase
       .from('income_daily')
       .select('*')
       .eq('household_id', householdId)
-      .gte('date', monthStart)
-      .lte('date', monthEnd);
-    if (data) setMonthEntries(data);
+      .gte('date', monday)
+      .lte('date', end);
+    if (data) {
+      setWeekEntries(data);
+      setTodayEntries(data.filter((e: IncomeDailyEntry) => e.date === getToday()));
+    }
+  }, [householdId]);
+
+  const loadChartEntries = useCallback(async () => {
+    const months = getLast3Months();
+    const start = months[0].start;
+    const end = months[months.length - 1].end;
+    const { data } = await supabase
+      .from('income_daily')
+      .select('*')
+      .eq('household_id', householdId)
+      .gte('date', start)
+      .lte('date', end);
+    if (data) setChartEntries(data);
   }, [householdId]);
 
   const loadAll = useCallback(async () => {
     await loadCategories();
-    await loadEntriesForDate(date);
-    await loadMonthEntries();
-  }, [loadCategories, loadEntriesForDate, date, loadMonthEntries]);
+    await loadWeekEntries(selectedWeek);
+    await loadChartEntries();
+  }, [loadCategories, loadWeekEntries, selectedWeek, loadChartEntries]);
 
-  useEffect(() => {
-    loadAll();
-  }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadWeekEntries(selectedWeek); }, [selectedWeek, loadWeekEntries]);
 
-  useEffect(() => {
-    loadEntriesForDate(date);
-  }, [date, loadEntriesForDate]);
+  const weekSumByCat = (catId: string) =>
+    weekEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
 
-  const handleSave = async () => {
-    setSaving(true);
-    for (const cat of categories) {
-      const amount = amounts[cat.id] || 0;
-      const note = notes[cat.id] || null;
-      if (amount > 0 || note) {
-        await supabase.from('income_daily').upsert(
-          {
-            household_id: householdId,
-            date,
-            category_id: cat.id,
-            amount,
-            notes: note,
-          },
-          { onConflict: 'household_id,date,category_id' }
-        );
-      }
+  const todayEntriesByCat = (catId: string) =>
+    todayEntries.filter((e) => e.category_id === catId);
+
+  const handleAddEntry = async (catId: string) => {
+    const amount = parseFloat(addAmounts[catId] || '');
+    if (isNaN(amount) || amount <= 0) return;
+    setAddSaving(true);
+    const t = getToday();
+    // Additive upsert: fetch existing, update or insert
+    const { data: existing } = await supabase
+      .from('income_daily')
+      .select('id, amount')
+      .eq('household_id', householdId)
+      .eq('date', t)
+      .eq('category_id', catId)
+      .maybeSingle();
+    if (existing) {
+      await supabase
+        .from('income_daily')
+        .update({ amount: existing.amount + amount, notes: addNotes[catId] || null })
+        .eq('id', existing.id);
+    } else {
+      await supabase.from('income_daily').insert({
+        household_id: householdId,
+        date: t,
+        category_id: catId,
+        amount,
+        notes: addNotes[catId] || null,
+      });
     }
+    setAddAmounts((prev) => ({ ...prev, [catId]: '' }));
+    setAddNotes((prev) => ({ ...prev, [catId]: '' }));
+    setAddSaving(false);
+    await loadWeekEntries(selectedWeek);
+    await loadChartEntries();
+  };
+
+  const handleDeleteEntry = async (entryId: string) => {
+    await supabase.from('income_daily').delete().eq('id', entryId);
+    await loadWeekEntries(selectedWeek);
+    await loadChartEntries();
+  };
+
+  const renameCategory = async (catId: string, newName: string) => {
+    await supabase.from('income_categories').update({ name: newName }).eq('id', catId);
+    await loadCategories();
+  };
+
+  const deleteCategory = async (catId: string) => {
+    await supabase.from('income_categories').delete().eq('id', catId);
+    setDeleteConfirm(null);
     await loadAll();
-    setSaving(false);
   };
 
   const addCategory = async () => {
@@ -512,12 +589,6 @@ function IncomeTab({
     await loadCategories();
   };
 
-  const deleteCategory = async (catId: string) => {
-    await supabase.from('income_categories').delete().eq('id', catId);
-    setDeleteConfirm(null);
-    await loadAll();
-  };
-
   const seedDefaults = async () => {
     const rows = DEFAULT_INCOME_CATEGORIES.map((name, i) => ({
       household_id: householdId,
@@ -528,14 +599,32 @@ function IncomeTab({
     await loadAll();
   };
 
-  const renameCategory = async (catId: string, newName: string) => {
-    await supabase.from('income_categories').update({ name: newName }).eq('id', catId);
-    await loadCategories();
-  };
+  // Build chart data: monthly income per category
+  const months = getLast3Months();
+  const monthlyChartData = months.map(({ label, start, end }) => {
+    const row: Record<string, string | number> = { month: label };
+    let total = 0;
+    categories.forEach((cat) => {
+      const sum = chartEntries
+        .filter((e) => e.category_id === cat.id && e.date >= start && e.date <= end)
+        .reduce((s, e) => s + e.amount, 0);
+      row[cat.name] = sum;
+      total += sum;
+    });
+    row['Total'] = total;
+    return row;
+  });
 
-  const monthSumByCat = (catId: string) =>
-    monthEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
-  const monthTotal = monthEntries.reduce((s, e) => s + e.amount, 0);
+  const CHART_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#06b6d4', '#f97316'];
+
+  const tooltipStyle = {
+    contentStyle: {
+      backgroundColor: '#18181b',
+      border: '1px solid #3f3f46',
+      borderRadius: '8px',
+      color: '#fff',
+    },
+  };
 
   return (
     <div className="space-y-6">
@@ -556,7 +645,6 @@ function IncomeTab({
           <CardHeader>
             <CardTitle>Income Categories</CardTitle>
           </CardHeader>
-
           {categories.length === 0 && (
             <div className="text-center py-6">
               <p className="text-zinc-400 mb-4">No income categories yet.</p>
@@ -571,14 +659,10 @@ function IncomeTab({
               )}
             </div>
           )}
-
           {categories.length > 0 && (
             <div className="space-y-2 mb-4">
               {categories.map((cat) => (
-                <div
-                  key={cat.id}
-                  className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
-                >
+                <div key={cat.id} className="flex items-center justify-between bg-zinc-800 rounded-lg p-3">
                   <InlineEdit
                     value={cat.name}
                     onSave={(v) => renameCategory(cat.id, v)}
@@ -590,24 +674,15 @@ function IncomeTab({
                       {deleteConfirm === cat.id ? (
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-red-400">Delete?</span>
-                          <button
-                            onClick={() => deleteCategory(cat.id)}
-                            className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
-                          >
+                          <button onClick={() => deleteCategory(cat.id)} className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors">
                             <Check className="w-3 h-3" />
                           </button>
-                          <button
-                            onClick={() => setDeleteConfirm(null)}
-                            className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                          >
+                          <button onClick={() => setDeleteConfirm(null)} className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors">
                             <X className="w-3 h-3" />
                           </button>
                         </div>
                       ) : (
-                        <button
-                          onClick={() => setDeleteConfirm(cat.id)}
-                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                        >
+                        <button onClick={() => setDeleteConfirm(cat.id)} className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors">
                           <Trash2 className="w-3 h-3" />
                         </button>
                       )}
@@ -617,8 +692,6 @@ function IncomeTab({
               ))}
             </div>
           )}
-
-          {/* Add new category */}
           {canEdit && (
             <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
               <InputField
@@ -642,80 +715,164 @@ function IncomeTab({
         </Card>
       )}
 
-      {/* Daily income entry */}
+      {/* Week selector + category rows */}
       {categories.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Daily Income Entry</CardTitle>
-          </CardHeader>
-          <div className="mb-4">
-            <InputField
-              label="Date"
-              type="date"
-              value={date}
-              onChange={setDate}
-              className="w-48"
-              disabled={!canEdit}
-            />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {categories.map((cat) => (
-              <div key={cat.id} className="bg-zinc-800 rounded-lg p-3 space-y-2">
-                <div className="text-sm font-medium text-white">{cat.name}</div>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={amounts[cat.id] || ''}
-                  placeholder="0"
-                  disabled={!canEdit}
-                  onChange={(e) =>
-                    setAmounts((a) => ({ ...a, [cat.id]: parseFloat(e.target.value) || 0 }))
-                  }
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-                <input
-                  type="text"
-                  value={notes[cat.id] || ''}
-                  placeholder="Notes (optional)"
-                  disabled={!canEdit}
-                  onChange={(e) => setNotes((n) => ({ ...n, [cat.id]: e.target.value }))}
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-              </div>
-            ))}
-          </div>
-          {canEdit && (
-            <div className="mt-4 flex justify-end">
-              <SaveButton saving={saving} onClick={handleSave} />
+            <div className="flex items-center justify-between">
+              <CardTitle>Weekly Income</CardTitle>
+              <select
+                value={selectedWeek}
+                onChange={(e) => setSelectedWeek(e.target.value)}
+                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+              >
+                {weekMondays.map((mon) => (
+                  <option key={mon} value={mon}>
+                    {formatWeekLabel(mon)}
+                    {mon === getMondayOfWeek(today) ? ' (this week)' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
-        </Card>
-      )}
-
-      {/* Monthly income summary */}
-      {categories.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>This Month&apos;s Income</CardTitle>
           </CardHeader>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+
+          <div className="text-xs text-zinc-500 mb-3">
+            {formatWeekLabel(selectedWeek)} &nbsp;·&nbsp; {selectedWeek} to {weekEnd}
+          </div>
+
+          <div className="space-y-3">
             {categories.map((cat) => {
-              const total = monthSumByCat(cat.id);
+              const weekTotal = weekSumByCat(cat.id);
+              const isOpen = openCategoryId === cat.id;
+              const todayCatEntries = todayEntriesByCat(cat.id);
+              const isCurrentWeek = selectedWeek === getMondayOfWeek(today);
+
               return (
                 <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
-                  <div className="text-xs text-zinc-400 mb-1">{cat.name}</div>
-                  <div className="text-lg font-semibold text-white">
-                    {formatCurrency(total)}
+                  {/* Category header row */}
+                  <div className="flex items-center justify-between">
+                    <InlineEdit
+                      value={cat.name}
+                      onSave={(v) => renameCategory(cat.id, v)}
+                      className="text-sm font-medium text-white"
+                      disabled={!canEdit}
+                    />
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-semibold text-emerald-400">
+                        {formatCurrency(weekTotal)}
+                      </span>
+                      {canEdit && isCurrentWeek && (
+                        <button
+                          onClick={() => setOpenCategoryId(isOpen ? null : cat.id)}
+                          className="p-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-400 hover:text-white transition-colors"
+                          title="Add income entry"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Inline add-entry form */}
+                  {isOpen && (
+                    <div className="mt-2 pt-2 border-t border-zinc-700">
+                      <div className="flex items-end gap-2">
+                        <div className="flex flex-col gap-1 w-32">
+                          <label className="text-xs text-zinc-400">Amount ($)</label>
+                          <input
+                            autoFocus
+                            type="number"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={addAmounts[cat.id] || ''}
+                            onChange={(e) => setAddAmounts((p) => ({ ...p, [cat.id]: e.target.value }))}
+                            onKeyDown={async (e) => {
+                              if (e.key === 'Enter') await handleAddEntry(cat.id);
+                              if (e.key === 'Escape') setOpenCategoryId(null);
+                            }}
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1 flex-1">
+                          <label className="text-xs text-zinc-400">Notes (optional)</label>
+                          <input
+                            type="text"
+                            placeholder="Optional"
+                            value={addNotes[cat.id] || ''}
+                            onChange={(e) => setAddNotes((p) => ({ ...p, [cat.id]: e.target.value }))}
+                            onKeyDown={async (e) => {
+                              if (e.key === 'Enter') await handleAddEntry(cat.id);
+                              if (e.key === 'Escape') setOpenCategoryId(null);
+                            }}
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                          />
+                        </div>
+                        <button
+                          onClick={() => handleAddEntry(cat.id)}
+                          disabled={addSaving || !addAmounts[cat.id] || parseFloat(addAmounts[cat.id]) <= 0}
+                          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors h-[34px]"
+                        >
+                          {addSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setOpenCategoryId(null)}
+                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors h-[34px]"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Today's entries */}
+                  {isCurrentWeek && todayCatEntries.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-zinc-700 space-y-1">
+                      <div className="text-xs text-zinc-500 mb-1">Today</div>
+                      {todayCatEntries.map((entry) => (
+                        <div key={entry.id} className="flex items-center justify-between text-xs py-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-emerald-400 font-medium">{formatCurrency(entry.amount)}</span>
+                            {entry.notes && <span className="text-zinc-500 truncate max-w-[180px]">{entry.notes}</span>}
+                          </div>
+                          {canEdit && (
+                            <button
+                              onClick={() => handleDeleteEntry(entry.id)}
+                              className="p-1 rounded bg-zinc-700 hover:bg-red-600/20 text-zinc-500 hover:text-red-400 transition-colors"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
-          <div className="bg-zinc-800 border border-emerald-600/30 rounded-lg p-4">
-            <div className="text-sm text-zinc-400">Total Monthly Income</div>
-            <div className="text-3xl font-bold text-emerald-400">
-              {formatCurrency(monthTotal)}
-            </div>
+        </Card>
+      )}
+
+      {/* Monthly income chart */}
+      {categories.length > 0 && monthlyChartData.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Monthly Income (Last 3 Months)</CardTitle>
+          </CardHeader>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={monthlyChartData} barCategoryGap="20%">
+                <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                <XAxis dataKey="month" tick={{ fill: '#a1a1aa', fontSize: 12 }} axisLine={{ stroke: '#3f3f46' }} tickLine={false} />
+                <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} axisLine={{ stroke: '#3f3f46' }} tickLine={false} tickFormatter={(v) => `$${v}`} />
+                <Tooltip {...tooltipStyle} formatter={(value) => [formatCurrency(Number(value)), '']} />
+                <Legend wrapperStyle={{ color: '#a1a1aa', fontSize: 12 }} />
+                {categories.map((cat, i) => (
+                  <Bar key={cat.id} dataKey={cat.name} fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[3, 3, 0, 0]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </Card>
       )}
@@ -735,33 +892,24 @@ function BudgetTab({
   canEdit: boolean;
 }) {
   const supabase = createClient();
-  const [saving, setSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [categories, setCategories] = useState<BudgetCategory[]>([]);
-  const [entries, setEntries] = useState<BudgetDailyEntry[]>([]);
   const [weekEntries, setWeekEntries] = useState<BudgetDailyEntry[]>([]);
-  const [monthEntries, setMonthEntries] = useState<BudgetDailyEntry[]>([]);
-  const [trendData, setTrendData] = useState<{ date: string; total: number }[]>([]);
-  const [date, setDate] = useState(getToday());
-  const [amounts, setAmounts] = useState<Record<string, number>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [todayEntries, setTodayEntries] = useState<BudgetDailyEntry[]>([]);
+  const [chartBudgetEntries, setChartBudgetEntries] = useState<BudgetDailyEntry[]>([]);
+  const [chartIncomeEntries, setChartIncomeEntries] = useState<IncomeDailyEntry[]>([]);
+  const [selectedWeek, setSelectedWeek] = useState<string>(() => getMondayOfWeek(getToday()));
+  const [openCategoryId, setOpenCategoryId] = useState<string | null>(null);
+  const [addAmounts, setAddAmounts] = useState<Record<string, string>>({});
+  const [addNotes, setAddNotes] = useState<Record<string, string>>({});
+  const [addSaving, setAddSaving] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [newCatName, setNewCatName] = useState('');
   const [newCatAmount, setNewCatAmount] = useState(0);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
-  const [quickAddCat, setQuickAddCat] = useState<string | null>(null);
-  const [quickAddAmount, setQuickAddAmount] = useState('');
-  const [quickAddNotes, setQuickAddNotes] = useState('');
-  const [quickAddSaving, setQuickAddSaving] = useState(false);
 
-  const toggleExpanded = (catId: string) => {
-    setExpandedCats((prev) => {
-      const next = new Set(prev);
-      if (next.has(catId)) next.delete(catId);
-      else next.add(catId);
-      return next;
-    });
-  };
+  const weekMondays = getPastWeekMondays(12);
+  const today = getToday();
+  const weekEnd = getWeekEnd(selectedWeek);
 
   const loadCategories = useCallback(async () => {
     const { data } = await supabase
@@ -772,140 +920,127 @@ function BudgetTab({
     if (data) setCategories(data);
   }, [householdId]);
 
-  const loadEntriesForDate = useCallback(
-    async (d: string) => {
-      const { data } = await supabase
+  const loadWeekEntries = useCallback(async (monday: string) => {
+    const end = getWeekEnd(monday);
+    const { data } = await supabase
+      .from('budget_daily')
+      .select('*')
+      .eq('household_id', householdId)
+      .gte('date', monday)
+      .lte('date', end);
+    if (data) {
+      setWeekEntries(data);
+      setTodayEntries(data.filter((e: BudgetDailyEntry) => e.date === getToday()));
+    }
+  }, [householdId]);
+
+  const loadChartEntries = useCallback(async () => {
+    const months = getLast3Months();
+    const start = months[0].start;
+    const end = months[months.length - 1].end;
+    const [budgetRes, incomeRes] = await Promise.all([
+      supabase
         .from('budget_daily')
         .select('*')
         .eq('household_id', householdId)
-        .eq('date', d);
-      if (data) {
-        setEntries(data);
-        const amts: Record<string, number> = {};
-        const nts: Record<string, string> = {};
-        data.forEach((e) => {
-          amts[e.category_id] = e.amount;
-          nts[e.category_id] = e.notes ?? '';
-        });
-        setAmounts(amts);
-        setNotes(nts);
-      }
-    },
-    [householdId]
-  );
-
-  const loadWeekEntries = useCallback(async () => {
-    const weekStart = getWeekStart(getToday());
-    const weekEnd = getWeekEnd(weekStart);
-    const { data } = await supabase
-      .from('budget_daily')
-      .select('*')
-      .eq('household_id', householdId)
-      .gte('date', weekStart)
-      .lte('date', weekEnd);
-    if (data) setWeekEntries(data);
-  }, [householdId]);
-
-  const loadMonthEntries = useCallback(async () => {
-    const monthStart = getMonthStart(getToday());
-    const monthEnd = getMonthEnd(getToday());
-    const { data } = await supabase
-      .from('budget_daily')
-      .select('*')
-      .eq('household_id', householdId)
-      .gte('date', monthStart)
-      .lte('date', monthEnd);
-    if (data) setMonthEntries(data);
-  }, [householdId]);
-
-  const loadTrendData = useCallback(async () => {
-    const startDate = getDaysAgo(30);
-    const { data } = await supabase
-      .from('budget_daily')
-      .select('*')
-      .eq('household_id', householdId)
-      .gte('date', startDate)
-      .lte('date', getToday());
-    if (data) {
-      const byDate: Record<string, number> = {};
-      data.forEach((e) => {
-        byDate[e.date] = (byDate[e.date] || 0) + e.amount;
-      });
-      const trend = Object.entries(byDate)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([d, total]) => ({ date: d, total }));
-      setTrendData(trend);
-    }
+        .gte('date', start)
+        .lte('date', end),
+      supabase
+        .from('income_daily')
+        .select('*')
+        .eq('household_id', householdId)
+        .gte('date', start)
+        .lte('date', end),
+    ]);
+    if (budgetRes.data) setChartBudgetEntries(budgetRes.data);
+    if (incomeRes.data) setChartIncomeEntries(incomeRes.data);
   }, [householdId]);
 
   const loadAll = useCallback(async () => {
     await loadCategories();
-    await loadEntriesForDate(date);
-    await loadWeekEntries();
-    await loadMonthEntries();
-    await loadTrendData();
-  }, [loadCategories, loadEntriesForDate, date, loadWeekEntries, loadMonthEntries, loadTrendData]);
+    await loadWeekEntries(selectedWeek);
+    await loadChartEntries();
+  }, [loadCategories, loadWeekEntries, selectedWeek, loadChartEntries]);
 
-  useEffect(() => {
-    loadAll();
-  }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadWeekEntries(selectedWeek); }, [selectedWeek, loadWeekEntries]);
 
-  useEffect(() => {
-    loadEntriesForDate(date);
-  }, [date, loadEntriesForDate]);
+  const weekSumByCat = (catId: string) =>
+    weekEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
 
-  const handleSave = async () => {
-    setSaving(true);
-    for (const cat of categories) {
-      const amount = amounts[cat.id] || 0;
-      const note = notes[cat.id] || null;
-      if (amount > 0 || note) {
-        await supabase.from('budget_daily').upsert(
-          {
-            user_id: userId,
-            household_id: householdId,
-            date,
-            category_id: cat.id,
-            amount,
-            notes: note,
-          },
-          { onConflict: 'household_id,date,category_id' }
-        );
-      }
-    }
-    await loadAll();
-    setSaving(false);
+  const todayEntriesByCat = (catId: string) =>
+    todayEntries.filter((e) => e.category_id === catId);
+
+  const getBudgetColor = (spent: number, target: number) => {
+    if (target <= 0) return 'text-white';
+    const pct = spent / target;
+    if (pct > 1) return 'text-red-400';
+    if (pct >= 0.9) return 'text-amber-400';
+    return 'text-emerald-400';
   };
 
-  const handleQuickAdd = async (catId: string) => {
-    const amount = parseFloat(quickAddAmount);
+  const getBudgetBarColor = (spent: number, target: number) => {
+    if (target <= 0) return 'bg-blue-500';
+    const pct = spent / target;
+    if (pct > 1) return 'bg-red-500';
+    if (pct >= 0.9) return 'bg-amber-500';
+    return 'bg-emerald-500';
+  };
+
+  const handleAddEntry = async (catId: string) => {
+    const amount = parseFloat(addAmounts[catId] || '');
     if (isNaN(amount) || amount <= 0) return;
-    setQuickAddSaving(true);
-    const today = getToday();
-    // Fetch existing entry for today + this category to add to it
+    setAddSaving(true);
+    const t = getToday();
+    // Additive: fetch existing entry for today + category, then update or insert
     const { data: existing } = await supabase
       .from('budget_daily')
-      .select('amount')
+      .select('id, amount')
       .eq('household_id', householdId)
-      .eq('date', today)
+      .eq('date', t)
       .eq('category_id', catId)
       .maybeSingle();
-    const existingAmount = existing?.amount || 0;
-    await supabase.from('budget_daily').upsert(
-      {
+    if (existing) {
+      await supabase
+        .from('budget_daily')
+        .update({ amount: existing.amount + amount, notes: addNotes[catId] || null })
+        .eq('id', existing.id);
+    } else {
+      await supabase.from('budget_daily').insert({
         user_id: userId,
         household_id: householdId,
-        date: today,
+        date: t,
         category_id: catId,
-        amount: existingAmount + amount,
-        notes: quickAddNotes || null,
-      },
-      { onConflict: 'household_id,date,category_id' }
-    );
-    setQuickAddCat(null);
-    setQuickAddAmount('');
-    setQuickAddNotes('');
-    setQuickAddSaving(false);
+        amount,
+        notes: addNotes[catId] || null,
+      });
+    }
+    setAddAmounts((prev) => ({ ...prev, [catId]: '' }));
+    setAddNotes((prev) => ({ ...prev, [catId]: '' }));
+    setAddSaving(false);
+    await loadWeekEntries(selectedWeek);
+    await loadChartEntries();
+  };
+
+  const handleDeleteEntry = async (entryId: string) => {
+    await supabase.from('budget_daily').delete().eq('id', entryId);
+    await loadWeekEntries(selectedWeek);
+    await loadChartEntries();
+  };
+
+  const renameCategory = async (catId: string, newName: string) => {
+    await supabase.from('budget_categories').update({ name: newName }).eq('id', catId);
+    await loadCategories();
+  };
+
+  const updateCategoryAmount = async (catId: string, newAmount: number) => {
+    await supabase.from('budget_categories').update({ monthly_amount: newAmount }).eq('id', catId);
+    await loadCategories();
+  };
+
+  const deleteCategory = async (catId: string) => {
+    await supabase.from('budget_categories').delete().eq('id', catId);
+    setDeleteConfirm(null);
     await loadAll();
   };
 
@@ -923,12 +1058,6 @@ function BudgetTab({
     await loadCategories();
   };
 
-  const deleteCategory = async (catId: string) => {
-    await supabase.from('budget_categories').delete().eq('id', catId);
-    setDeleteConfirm(null);
-    await loadAll();
-  };
-
   const seedDefaults = async () => {
     const rows = DEFAULT_BUDGET_CATEGORIES.map((c, i) => ({
       user_id: userId,
@@ -941,43 +1070,44 @@ function BudgetTab({
     await loadAll();
   };
 
-  const renameCategory = async (catId: string, newName: string) => {
-    await supabase.from('budget_categories').update({ name: newName }).eq('id', catId);
-    await loadCategories();
+  // Chart 1: spending vs budget target per category (last 3 months)
+  const months = getLast3Months();
+  const spendingVsBudgetData = months.map(({ label, start, end }) => {
+    const row: Record<string, string | number> = { month: label };
+    categories.forEach((cat) => {
+      const spent = chartBudgetEntries
+        .filter((e) => e.category_id === cat.id && e.date >= start && e.date <= end)
+        .reduce((s, e) => s + e.amount, 0);
+      row[`${cat.name} Spent`] = spent;
+      row[`${cat.name} Budget`] = cat.monthly_amount;
+    });
+    return row;
+  });
+
+  // Chart 2: total income vs total spending per month (last 3 months)
+  const incomeVsSpendingData = months.map(({ label, start, end }) => {
+    const spending = chartBudgetEntries
+      .filter((e) => e.date >= start && e.date <= end)
+      .reduce((s, e) => s + e.amount, 0);
+    const income = chartIncomeEntries
+      .filter((e) => e.date >= start && e.date <= end)
+      .reduce((s, e) => s + e.amount, 0);
+    return { month: label, Income: income, Spending: spending };
+  });
+
+  const SPENT_COLORS = ['#ef4444', '#f97316', '#f59e0b', '#84cc16', '#06b6d4', '#8b5cf6'];
+  const BUDGET_COLORS = ['#fca5a5', '#fdba74', '#fcd34d', '#bef264', '#67e8f9', '#c4b5fd'];
+
+  const tooltipStyle = {
+    contentStyle: {
+      backgroundColor: '#18181b',
+      border: '1px solid #3f3f46',
+      borderRadius: '8px',
+      color: '#fff',
+    },
   };
 
-  const updateCategoryAmount = async (catId: string, newAmount: number) => {
-    await supabase
-      .from('budget_categories')
-      .update({ monthly_amount: newAmount })
-      .eq('id', catId);
-    await loadCategories();
-  };
-
-  const weekSumByCat = (catId: string) =>
-    weekEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
-  const weekEntriesByCat = (catId: string) =>
-    weekEntries.filter((e) => e.category_id === catId && e.amount > 0).sort((a, b) => a.date.localeCompare(b.date));
-  const monthSumByCat = (catId: string) =>
-    monthEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
-  const todaySumByCat = (catId: string) =>
-    entries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
-
-  const getBudgetColor = (spent: number, target: number) => {
-    if (target <= 0) return 'text-white';
-    const pct = spent / target;
-    if (pct > 1) return 'text-red-400';
-    if (pct >= 0.9) return 'text-amber-400';
-    return 'text-emerald-400';
-  };
-
-  const getBudgetBarColor = (spent: number, target: number) => {
-    if (target <= 0) return 'bg-blue-500';
-    const pct = spent / target;
-    if (pct > 1) return 'bg-red-500';
-    if (pct >= 0.9) return 'bg-amber-500';
-    return 'bg-emerald-500';
-  };
+  const isCurrentWeek = selectedWeek === getMondayOfWeek(today);
 
   return (
     <div className="space-y-6">
@@ -998,7 +1128,6 @@ function BudgetTab({
           <CardHeader>
             <CardTitle>Budget Categories</CardTitle>
           </CardHeader>
-
           {categories.length === 0 && (
             <div className="text-center py-6">
               <p className="text-zinc-400 mb-4">No categories yet.</p>
@@ -1013,14 +1142,10 @@ function BudgetTab({
               )}
             </div>
           )}
-
           {categories.length > 0 && (
             <div className="space-y-2 mb-4">
               {categories.map((cat) => (
-                <div
-                  key={cat.id}
-                  className="flex items-center justify-between bg-zinc-800 rounded-lg p-3"
-                >
+                <div key={cat.id} className="flex items-center justify-between bg-zinc-800 rounded-lg p-3">
                   <div className="flex items-center gap-3">
                     <InlineEdit
                       value={cat.name}
@@ -1044,24 +1169,15 @@ function BudgetTab({
                       {deleteConfirm === cat.id ? (
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-red-400">Delete?</span>
-                          <button
-                            onClick={() => deleteCategory(cat.id)}
-                            className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
-                          >
+                          <button onClick={() => deleteCategory(cat.id)} className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors">
                             <Check className="w-3 h-3" />
                           </button>
-                          <button
-                            onClick={() => setDeleteConfirm(null)}
-                            className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                          >
+                          <button onClick={() => setDeleteConfirm(null)} className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors">
                             <X className="w-3 h-3" />
                           </button>
                         </div>
                       ) : (
-                        <button
-                          onClick={() => setDeleteConfirm(cat.id)}
-                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
-                        >
+                        <button onClick={() => setDeleteConfirm(cat.id)} className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors">
                           <Trash2 className="w-3 h-3" />
                         </button>
                       )}
@@ -1071,8 +1187,6 @@ function BudgetTab({
               ))}
             </div>
           )}
-
-          {/* Add new category */}
           {canEdit && (
             <div className="flex items-end gap-3 pt-3 border-t border-zinc-800">
               <InputField
@@ -1103,97 +1217,60 @@ function BudgetTab({
         </Card>
       )}
 
-      {/* Daily spending entry */}
+      {/* Week selector + category rows */}
       {categories.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Daily Spending Entry</CardTitle>
-          </CardHeader>
-          <div className="mb-4">
-            <InputField
-              label="Date"
-              type="date"
-              value={date}
-              onChange={setDate}
-              className="w-48"
-              disabled={!canEdit}
-            />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {categories.map((cat) => (
-              <div key={cat.id} className="bg-zinc-800 rounded-lg p-3 space-y-2">
-                <div className="text-sm font-medium text-white">{cat.name}</div>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={amounts[cat.id] || ''}
-                  placeholder="0"
-                  disabled={!canEdit}
-                  onChange={(e) =>
-                    setAmounts((a) => ({ ...a, [cat.id]: parseFloat(e.target.value) || 0 }))
-                  }
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-                <input
-                  type="text"
-                  value={notes[cat.id] || ''}
-                  placeholder="Notes (optional)"
-                  disabled={!canEdit}
-                  onChange={(e) => setNotes((n) => ({ ...n, [cat.id]: e.target.value }))}
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-              </div>
-            ))}
-          </div>
-          {canEdit && (
-            <div className="mt-4 flex justify-end">
-              <SaveButton saving={saving} onClick={handleSave} />
+            <div className="flex items-center justify-between">
+              <CardTitle>Weekly Budget</CardTitle>
+              <select
+                value={selectedWeek}
+                onChange={(e) => setSelectedWeek(e.target.value)}
+                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+              >
+                {weekMondays.map((mon) => (
+                  <option key={mon} value={mon}>
+                    {formatWeekLabel(mon)}
+                    {mon === getMondayOfWeek(today) ? ' (this week)' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
-        </Card>
-      )}
-
-      {/* This Week - with expandable daily entries and quick add */}
-      {categories.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>This Week (Mon-Sun)</CardTitle>
           </CardHeader>
+
+          <div className="text-xs text-zinc-500 mb-3">
+            {formatWeekLabel(selectedWeek)} &nbsp;·&nbsp; {selectedWeek} to {weekEnd}
+          </div>
+
           <div className="space-y-3">
             {categories.map((cat) => {
               const spent = weekSumByCat(cat.id);
-              const weeklyBudget = Math.round(cat.monthly_amount / 4.333);
-              const pct = weeklyBudget > 0 ? Math.round((spent / weeklyBudget) * 100) : 0;
-              const isExpanded = expandedCats.has(cat.id);
-              const dailyEntries = weekEntriesByCat(cat.id);
-              const budgetColor = getBudgetColor(spent, weeklyBudget);
-              const barColor = getBudgetBarColor(spent, weeklyBudget);
+              const weeklyTarget = cat.monthly_amount / 4.333;
+              const pct = weeklyTarget > 0 ? Math.round((spent / weeklyTarget) * 100) : 0;
+              const budgetColor = getBudgetColor(spent, weeklyTarget);
+              const barColor = getBudgetBarColor(spent, weeklyTarget);
+              const isOpen = openCategoryId === cat.id;
+              const todayCatEntries = todayEntriesByCat(cat.id);
 
               return (
                 <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
+                  {/* Category header row */}
                   <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => toggleExpanded(cat.id)}
-                        className="text-zinc-400 hover:text-white transition-colors"
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="w-4 h-4" />
-                        ) : (
-                          <ChevronRight className="w-4 h-4" />
-                        )}
-                      </button>
-                      <span className="text-sm font-medium text-white">{cat.name}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
+                    <InlineEdit
+                      value={cat.name}
+                      onSave={(v) => renameCategory(cat.id, v)}
+                      className="text-sm font-medium text-white"
+                      disabled={!canEdit}
+                    />
+                    <div className="flex items-center gap-3">
                       <span className={cn('text-sm font-semibold', budgetColor)}>
-                        {formatCurrency(spent)} / {formatCurrency(weeklyBudget)}
+                        {formatCurrency(spent)} / {formatCurrency(weeklyTarget)}
                       </span>
-                      {canEdit && (
+                      {canEdit && isCurrentWeek && (
                         <button
-                          onClick={() => setQuickAddCat(quickAddCat === cat.id ? null : cat.id)}
+                          onClick={() => setOpenCategoryId(isOpen ? null : cat.id)}
                           className="p-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-400 hover:text-white transition-colors"
-                          title="Quick add today's spending"
+                          title="Add spending entry"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
@@ -1208,72 +1285,82 @@ function BudgetTab({
                       style={{ width: `${Math.min(pct, 100)}%` }}
                     />
                   </div>
-                  <div className={cn('text-xs', budgetColor)}>
-                    {pct}% of weekly budget
-                  </div>
+                  <div className={cn('text-xs', budgetColor)}>{pct}% of weekly budget</div>
 
-                  {/* Quick add inline form */}
-                  {quickAddCat === cat.id && (
-                    <div className="mt-2 pt-2 border-t border-zinc-700 flex items-end gap-2">
-                      <InputField
-                        label="Amount ($)"
-                        value={quickAddAmount}
-                        step="0.01"
-                        placeholder="0.00"
-                        onChange={setQuickAddAmount}
-                        className="w-28"
-                      />
-                      <InputField
-                        label="Notes"
-                        type="text"
-                        value={quickAddNotes}
-                        placeholder="Optional"
-                        onChange={setQuickAddNotes}
-                        className="flex-1"
-                      />
-                      <button
-                        onClick={() => handleQuickAdd(cat.id)}
-                        disabled={quickAddSaving || !quickAddAmount || parseFloat(quickAddAmount) <= 0}
-                        className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-xs font-medium transition-colors h-[38px]"
-                      >
-                        {quickAddSaving ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <Check className="w-3 h-3" />
-                        )}
-                        Add
-                      </button>
+                  {/* Inline add-entry form */}
+                  {isOpen && (
+                    <div className="mt-2 pt-2 border-t border-zinc-700">
+                      <div className="flex items-end gap-2">
+                        <div className="flex flex-col gap-1 w-32">
+                          <label className="text-xs text-zinc-400">Amount ($)</label>
+                          <input
+                            autoFocus
+                            type="number"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={addAmounts[cat.id] || ''}
+                            onChange={(e) => setAddAmounts((p) => ({ ...p, [cat.id]: e.target.value }))}
+                            onKeyDown={async (e) => {
+                              if (e.key === 'Enter') await handleAddEntry(cat.id);
+                              if (e.key === 'Escape') setOpenCategoryId(null);
+                            }}
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1 flex-1">
+                          <label className="text-xs text-zinc-400">Notes (optional)</label>
+                          <input
+                            type="text"
+                            placeholder="Optional"
+                            value={addNotes[cat.id] || ''}
+                            onChange={(e) => setAddNotes((p) => ({ ...p, [cat.id]: e.target.value }))}
+                            onKeyDown={async (e) => {
+                              if (e.key === 'Enter') await handleAddEntry(cat.id);
+                              if (e.key === 'Escape') setOpenCategoryId(null);
+                            }}
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                          />
+                        </div>
+                        <button
+                          onClick={() => handleAddEntry(cat.id)}
+                          disabled={addSaving || !addAmounts[cat.id] || parseFloat(addAmounts[cat.id]) <= 0}
+                          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors h-[34px]"
+                        >
+                          {addSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setOpenCategoryId(null)}
+                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors h-[34px]"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
                   )}
 
-                  {/* Expandable daily entries */}
-                  {isExpanded && dailyEntries.length > 0 && (
+                  {/* Today's entries */}
+                  {isCurrentWeek && todayCatEntries.length > 0 && (
                     <div className="mt-2 pt-2 border-t border-zinc-700 space-y-1">
-                      {dailyEntries.map((entry) => (
-                        <div
-                          key={entry.id}
-                          className="flex items-center justify-between text-xs py-1"
-                        >
-                          <span className="text-zinc-400">{formatDate(entry.date)}</span>
+                      <div className="text-xs text-zinc-500 mb-1">Today</div>
+                      {todayCatEntries.map((entry) => (
+                        <div key={entry.id} className="flex items-center justify-between text-xs py-0.5">
                           <div className="flex items-center gap-2">
-                            {entry.notes && (
-                              <span className="text-zinc-500 truncate max-w-[150px]">
-                                {entry.notes}
-                              </span>
-                            )}
-                            <span className="text-white font-medium">
-                              {formatCurrency(entry.amount)}
-                            </span>
+                            <span className={cn('font-medium', budgetColor)}>{formatCurrency(entry.amount)}</span>
+                            {entry.notes && <span className="text-zinc-500 truncate max-w-[180px]">{entry.notes}</span>}
                           </div>
+                          {canEdit && (
+                            <button
+                              onClick={() => handleDeleteEntry(entry.id)}
+                              className="p-1 rounded bg-zinc-700 hover:bg-red-600/20 text-zinc-500 hover:text-red-400 transition-colors"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
                   )}
-                  {isExpanded && dailyEntries.length === 0 && (
-                    <div className="mt-2 pt-2 border-t border-zinc-700 text-xs text-zinc-500">
-                      No entries this week.
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -1281,81 +1368,48 @@ function BudgetTab({
         </Card>
       )}
 
-      {/* Dashboard: This Month */}
+      {/* Chart 1: Monthly spending vs budget target per category */}
       {categories.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>This Month</CardTitle>
+            <CardTitle>Spending vs Budget — Last 3 Months</CardTitle>
           </CardHeader>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {categories.map((cat) => {
-              const spent = monthSumByCat(cat.id);
-              const pct =
-                cat.monthly_amount > 0
-                  ? Math.round((spent / cat.monthly_amount) * 100)
-                  : 0;
-              const budgetColor = getBudgetColor(spent, cat.monthly_amount);
-              const barColor = getBudgetBarColor(spent, cat.monthly_amount);
-              return (
-                <div key={cat.id} className="bg-zinc-800 rounded-lg p-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-zinc-400">{cat.name}</span>
-                    <span className="text-xs text-zinc-500">
-                      {formatCurrency(cat.monthly_amount)}/mo
-                    </span>
-                  </div>
-                  <div className={cn('text-lg font-semibold mb-1', budgetColor)}>
-                    {formatCurrency(spent)}
-                  </div>
-                  <div className="w-full bg-zinc-700 rounded-full h-2">
-                    <div
-                      className={cn('h-2 rounded-full transition-all', barColor)}
-                      style={{ width: `${Math.min(pct, 100)}%` }}
-                    />
-                  </div>
-                  <div className={cn('text-xs mt-1', budgetColor)}>
-                    {pct}% of monthly budget
-                  </div>
-                </div>
-              );
-            })}
+          <div className="h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={spendingVsBudgetData} barCategoryGap="25%">
+                <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                <XAxis dataKey="month" tick={{ fill: '#a1a1aa', fontSize: 12 }} axisLine={{ stroke: '#3f3f46' }} tickLine={false} />
+                <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} axisLine={{ stroke: '#3f3f46' }} tickLine={false} tickFormatter={(v) => `$${v}`} />
+                <Tooltip {...tooltipStyle} formatter={(value) => [formatCurrency(Number(value)), '']} />
+                <Legend wrapperStyle={{ color: '#a1a1aa', fontSize: 11 }} />
+                {categories.map((cat, i) => (
+                  <Bar key={`${cat.id}-spent`} dataKey={`${cat.name} Spent`} fill={SPENT_COLORS[i % SPENT_COLORS.length]} radius={[3, 3, 0, 0]} />
+                ))}
+                {categories.map((cat, i) => (
+                  <Bar key={`${cat.id}-budget`} dataKey={`${cat.name} Budget`} fill={BUDGET_COLORS[i % BUDGET_COLORS.length]} radius={[3, 3, 0, 0]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </Card>
       )}
 
-      {/* Spending Trend */}
-      {trendData.length > 1 && (
+      {/* Chart 2: Monthly income vs spending */}
+      {incomeVsSpendingData.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Spending Trend (Last 30 Days)</CardTitle>
+            <CardTitle>Income vs Spending — Last 3 Months</CardTitle>
           </CardHeader>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={trendData}>
-                <XAxis
-                  dataKey="date"
-                  tick={{ fill: '#a1a1aa', fontSize: 10 }}
-                  axisLine={{ stroke: '#3f3f46' }}
-                  tickLine={false}
-                  tickFormatter={(v) => v.slice(5)}
-                />
-                <YAxis
-                  tick={{ fill: '#a1a1aa', fontSize: 12 }}
-                  axisLine={{ stroke: '#3f3f46' }}
-                  tickLine={false}
-                  tickFormatter={(v) => `$${v}`}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#18181b',
-                    border: '1px solid #3f3f46',
-                    borderRadius: '8px',
-                    color: '#fff',
-                  }}
-                  formatter={(value) => [formatCurrency(Number(value)), 'Total Spent']}
-                  labelFormatter={(label) => formatDate(String(label))}
-                />
-                <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+              <BarChart data={incomeVsSpendingData} barCategoryGap="30%">
+                <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                <XAxis dataKey="month" tick={{ fill: '#a1a1aa', fontSize: 12 }} axisLine={{ stroke: '#3f3f46' }} tickLine={false} />
+                <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} axisLine={{ stroke: '#3f3f46' }} tickLine={false} tickFormatter={(v) => `$${v}`} />
+                <Tooltip {...tooltipStyle} formatter={(value) => [formatCurrency(Number(value)), '']} />
+                <Legend wrapperStyle={{ color: '#a1a1aa', fontSize: 12 }} />
+                <Bar dataKey="Income" fill="#10b981" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="Spending" fill="#ef4444" radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
