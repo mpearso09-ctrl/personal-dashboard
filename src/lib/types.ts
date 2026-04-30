@@ -222,6 +222,55 @@ export const DEFAULT_NET_WORTH_ASSETS = [
   'Vehicles',
 ];
 
+// ---- Milestones (per-user fitness PRs) ----
+
+export interface MilestoneType {
+  id: string;
+  user_id: string;
+  category: 'weightlifting' | 'cardio' | 'custom';
+  name: string;
+  unit: 'lbs' | 'seconds' | 'pace';
+  is_default: boolean;
+  sort_order: number;
+  hidden: boolean;
+  created_at: string;
+}
+
+export interface MilestoneEntry {
+  id: string;
+  user_id: string;
+  milestone_type_id: string;
+  rep_max: 1 | 2 | 3 | 4 | 5 | 10 | null;
+  value: number;
+  date: string;
+  notes: string | null;
+  is_pr: boolean;
+  created_at: string;
+}
+
+export const DEFAULT_WEIGHTLIFTING_MILESTONES: { name: string; sort_order: number }[] = [
+  { name: 'Bench Press', sort_order: 0 },
+  { name: 'Squat', sort_order: 1 },
+  { name: 'Deadlift', sort_order: 2 },
+  { name: 'Shoulder Press', sort_order: 3 },
+  { name: 'Clean', sort_order: 4 },
+  { name: 'Power Clean', sort_order: 5 },
+  { name: 'Push Press', sort_order: 6 },
+  { name: 'Push Jerk', sort_order: 7 },
+  { name: 'Snatch', sort_order: 8 },
+];
+
+export const DEFAULT_CARDIO_MILESTONES: { name: string; unit: 'seconds' | 'pace'; sort_order: number }[] = [
+  { name: 'Plank', unit: 'seconds', sort_order: 0 },
+  { name: '1KM Run', unit: 'pace', sort_order: 1 },
+  { name: '2KM Run', unit: 'pace', sort_order: 2 },
+  { name: '5K Run', unit: 'pace', sort_order: 3 },
+  { name: '10KM Run', unit: 'pace', sort_order: 4 },
+  { name: '21KM Half Marathon', unit: 'pace', sort_order: 5 },
+];
+
+export const REP_MAXES = [1, 2, 3, 4, 5, 10] as const;
+
 export const DEFAULT_INCOME_CATEGORIES = [
   'Protocase Salary',
   'Frameworks Revenue',
