@@ -1078,6 +1078,10 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
   const [newTypeCategory, setNewTypeCategory] = useState<'weightlifting' | 'cardio' | 'custom'>('custom');
   const [newTypeUnit, setNewTypeUnit] = useState<'lbs' | 'seconds' | 'pace'>('lbs');
 
+  // Log vs Results screen
+  const [milestoneScreen, setMilestoneScreen] = useState<'log' | 'results'>('results');
+  const [logTypeId, setLogTypeId] = useState<string>('');
+
   // -------------------------------------------------------------------------
   // Data loading
   // -------------------------------------------------------------------------
@@ -1199,7 +1203,6 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
     setEntryValue('');
     setEntryNotes('');
     setEntrySaving(false);
-    setShowAddEntry(null);
     await load();
     if (isPR) setTimeout(() => setJustPR(false), 3000);
   }
@@ -1263,82 +1266,148 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
   };
 
   // -------------------------------------------------------------------------
-  // Entry form component (shared between weightlifting and cardio)
+  // Log screen — stable component, no remounting on keystroke
   // -------------------------------------------------------------------------
 
-  function EntryForm({ typeId, category, unit }: { typeId: string; category: string; unit: string }) {
+  function renderLogScreen() {
+    const allTypes = [...milestoneTypes].sort((a, b) => a.name.localeCompare(b.name));
+    const activeType = allTypes.find((t) => t.id === logTypeId) ?? allTypes[0] ?? null;
+    const isWeightlifting = activeType?.category === 'weightlifting';
+
     return (
-      <div className="mt-3 border-t border-zinc-700 pt-3 space-y-3">
-        {category === 'weightlifting' && (
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Rep Max</label>
-            <div className="flex gap-1 flex-wrap">
-              {REP_MAXES.map((rm) => (
-                <button
-                  key={rm}
-                  onClick={() => setEntryRepMax(rm)}
-                  className={cn(
-                    'px-2.5 py-1 rounded text-xs font-medium border transition-colors',
-                    entryRepMax === rm
-                      ? 'bg-blue-600 border-blue-500 text-white'
-                      : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-500'
-                  )}
+      <div className="space-y-6 max-w-lg">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setMilestoneScreen('results')}
+            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Back to Results
+          </button>
+          <h2 className="text-lg font-semibold text-white">Log Entry</h2>
+        </div>
+
+        {allTypes.length === 0 ? (
+          <p className="text-zinc-500">No milestones set up. Go to Results and load defaults first.</p>
+        ) : (
+          <Card>
+            <div className="space-y-4">
+              {/* Milestone selector */}
+              <div>
+                <label className="text-xs text-zinc-400 block mb-1">Milestone</label>
+                <select
+                  value={activeType?.id ?? ''}
+                  onChange={(e) => { setLogTypeId(e.target.value); setEntryValue(''); setEntryRepMax(1); }}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
                 >
-                  {rm}RM
-                </button>
-              ))}
+                  {(['weightlifting', 'cardio', 'custom'] as const).map((cat) => {
+                    const catTypes = allTypes.filter((t) => t.category === cat);
+                    if (!catTypes.length) return null;
+                    return (
+                      <optgroup key={cat} label={cat.charAt(0).toUpperCase() + cat.slice(1)}>
+                        {catTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {activeType && (
+                <>
+                  {/* Rep max selector (weightlifting only) */}
+                  {isWeightlifting && (
+                    <div>
+                      <label className="text-xs text-zinc-400 block mb-1">Rep Max</label>
+                      <div className="flex gap-2 flex-wrap">
+                        {REP_MAXES.map((rm) => (
+                          <button
+                            key={rm}
+                            onClick={() => setEntryRepMax(rm)}
+                            className={cn(
+                              'px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors',
+                              entryRepMax === rm
+                                ? 'bg-blue-600 border-blue-500 text-white'
+                                : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-500'
+                            )}
+                          >
+                            {rm}RM
+                          </button>
+                        ))}
+                      </div>
+                      {/* Show current best for this RM */}
+                      {(() => {
+                        const best = getBest(activeType.id, entryRepMax);
+                        return best ? (
+                          <p className="text-xs text-zinc-500 mt-1">
+                            Current best: <span className="text-amber-400">{formatValue(best.value, activeType.unit)}</span> on {formatDate(best.date)}
+                          </p>
+                        ) : <p className="text-xs text-zinc-500 mt-1">No previous entry for {entryRepMax}RM</p>;
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Value input */}
+                  <div>
+                    <label className="text-xs text-zinc-400 block mb-1">
+                      {activeType.unit === 'lbs' ? 'Weight (lbs)' : activeType.unit === 'seconds' ? 'Time (seconds or m:ss)' : 'Time (mm:ss or h:mm:ss)'}
+                    </label>
+                    <input
+                      type="text"
+                      value={entryValue}
+                      onChange={(e) => setEntryValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && entryValue) handleAddEntry(activeType.id); }}
+                      placeholder={activeType.unit === 'lbs' ? 'e.g. 225' : activeType.unit === 'seconds' ? 'e.g. 90 or 1:30' : 'e.g. 25:30'}
+                      className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2.5 text-lg text-white focus:border-blue-500 focus:outline-none"
+                      autoFocus
+                    />
+                    {/* Show current best for cardio */}
+                    {!isWeightlifting && (() => {
+                      const best = getBest(activeType.id, null);
+                      return best ? (
+                        <p className="text-xs text-zinc-500 mt-1">
+                          Current best: <span className="text-amber-400">{formatValue(best.value, activeType.unit)}</span> on {formatDate(best.date)}
+                        </p>
+                      ) : <p className="text-xs text-zinc-500 mt-1">No previous entries</p>;
+                    })()}
+                  </div>
+
+                  {/* Date and notes */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs text-zinc-400 block mb-1">Date</label>
+                      <input
+                        type="date"
+                        value={entryDate}
+                        onChange={(e) => setEntryDate(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-zinc-400 block mb-1">Notes (optional)</label>
+                      <input
+                        type="text"
+                        value={entryNotes}
+                        onChange={(e) => setEntryNotes(e.target.value)}
+                        placeholder="e.g. felt strong"
+                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Save */}
+                  <button
+                    onClick={() => handleAddEntry(activeType.id)}
+                    disabled={entrySaving || !entryValue}
+                    className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors"
+                  >
+                    <Save className="h-4 w-4" />
+                    {entrySaving ? 'Saving...' : 'Save Entry'}
+                  </button>
+                </>
+              )}
             </div>
-          </div>
+          </Card>
         )}
-        <div>
-          <label className="text-xs text-zinc-400 block mb-1">
-            {unit === 'lbs' ? 'Weight (lbs)' : unit === 'seconds' ? 'Time (seconds or m:ss)' : 'Time (mm:ss or h:mm:ss)'}
-          </label>
-          <input
-            type="text"
-            value={entryValue}
-            onChange={(e) => setEntryValue(e.target.value)}
-            placeholder={unit === 'lbs' ? 'e.g. 225' : unit === 'seconds' ? 'e.g. 90 or 1:30' : 'e.g. 25:30'}
-            className="w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Date</label>
-            <input
-              type="date"
-              value={entryDate}
-              onChange={(e) => setEntryDate(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Notes (optional)</label>
-            <input
-              type="text"
-              value={entryNotes}
-              onChange={(e) => setEntryNotes(e.target.value)}
-              placeholder="e.g. felt strong"
-              className="w-full bg-zinc-900 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-            />
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => handleAddEntry(typeId)}
-            disabled={entrySaving || !entryValue}
-            className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm font-medium transition-colors"
-          >
-            <Save className="h-3.5 w-3.5" />
-            {entrySaving ? 'Saving...' : 'Save'}
-          </button>
-          <button
-            onClick={() => { setShowAddEntry(null); setEntryValue(''); setEntryNotes(''); }}
-            className="px-3 py-1.5 rounded text-sm text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
       </div>
     );
   }
@@ -1544,11 +1613,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
               )}
               {!isReadOnly && !editMode && (
                 <button
-                  onClick={() => {
-                    setShowAddEntry(isOpen ? null : type.id);
-                    setEntryValue('');
-                    setEntryNotes('');
-                  }}
+                  onClick={() => { setLogTypeId(type.id); setEntryValue(''); setEntryRepMax(1); setMilestoneScreen('log'); }}
                   className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-600/40 rounded px-2 py-0.5 transition-colors"
                 >
                   <Plus className="h-3 w-3" />
@@ -1572,10 +1637,6 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
               );
             })}
           </div>
-
-          {isOpen && (
-            <EntryForm typeId={type.id} category={type.category} unit={type.unit} />
-          )}
         </div>
       );
     }
@@ -1608,11 +1669,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
               )}
               {!isReadOnly && !editMode && (
                 <button
-                  onClick={() => {
-                    setShowAddEntry(isOpen ? null : type.id);
-                    setEntryValue('');
-                    setEntryNotes('');
-                  }}
+                  onClick={() => { setLogTypeId(type.id); setEntryValue(''); setMilestoneScreen('log'); }}
                   className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-600/40 rounded px-2 py-0.5 transition-colors"
                 >
                   <Plus className="h-3 w-3" />
@@ -1642,10 +1699,6 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
                 />
               </LineChart>
             </ResponsiveContainer>
-          )}
-
-          {isOpen && (
-            <EntryForm typeId={type.id} category={type.category} unit={type.unit} />
           )}
         </div>
       );
@@ -1737,20 +1790,39 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
           <Trophy className="h-5 w-5 text-amber-400" />
           <h2 className="text-lg font-semibold text-white">Personal Records</h2>
         </div>
-        {!isReadOnly && view === 'grid' && (
-          <button
-            onClick={() => { setEditMode(!editMode); setShowAddType(false); }}
-            className={cn(
-              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors',
-              editMode
-                ? 'bg-blue-600/20 border-blue-500/40 text-blue-400'
-                : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white'
-            )}
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            {editMode ? 'Done Editing' : 'Edit'}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Log / Results toggle */}
+          {!isReadOnly && view === 'grid' && milestoneTypes.length > 0 && (
+            <div className="flex rounded-lg border border-zinc-700 overflow-hidden text-sm">
+              <button
+                onClick={() => setMilestoneScreen('results')}
+                className={cn('px-3 py-1.5 transition-colors', milestoneScreen === 'results' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white')}
+              >
+                Results
+              </button>
+              <button
+                onClick={() => { setMilestoneScreen('log'); setEntryValue(''); }}
+                className={cn('px-3 py-1.5 transition-colors', milestoneScreen === 'log' ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white')}
+              >
+                <span className="flex items-center gap-1"><Plus className="h-3.5 w-3.5" />Log Entry</span>
+              </button>
+            </div>
+          )}
+          {!isReadOnly && view === 'grid' && milestoneScreen === 'results' && (
+            <button
+              onClick={() => { setEditMode(!editMode); setShowAddType(false); }}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors',
+                editMode
+                  ? 'bg-blue-600/20 border-blue-500/40 text-blue-400'
+                  : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white'
+              )}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              {editMode ? 'Done' : 'Edit'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Empty state */}
@@ -1846,7 +1918,11 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
 
       {/* Main content */}
       {milestoneTypes.length > 0 && (
-        view === 'grid' ? renderGridView() : renderDetailView()
+        view === 'detail'
+          ? renderDetailView()
+          : milestoneScreen === 'log' && !isReadOnly
+            ? renderLogScreen()
+            : renderGridView()
       )}
     </div>
   );
