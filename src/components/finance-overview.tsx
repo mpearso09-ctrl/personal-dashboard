@@ -410,7 +410,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
   return (
     <div className="space-y-6">
       {/* ── Summary Cards ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <SummaryCard
           icon={<Receipt size={16} />}
           label="Monthly Spending"
@@ -495,7 +495,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
                       {formatCurrency(Math.abs(acc.dailyChange))}
                     </span>
                   )}
-                  <span className="text-sm font-medium text-zinc-300 tabular-nums w-28 text-right">
+                  <span className="text-sm font-medium text-zinc-300 tabular-nums text-right">
                     {formatCurrency(acc.balance)}
                   </span>
                 </div>
@@ -511,7 +511,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
           <select
             value={timeRange}
             onChange={(e) => setTimeRange(e.target.value as TimeRange)}
-            className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white"
+            className="px-3 py-2.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white min-h-[44px]"
           >
             {TIME_RANGES.map((r) => (
               <option key={r.value} value={r.value}>{r.label}</option>
@@ -524,7 +524,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
                 key={g}
                 onClick={() => setGranularity(g)}
                 className={cn(
-                  'px-3 py-1 rounded-md text-sm font-medium transition-colors',
+                  'px-3 py-2.5 rounded-md text-sm font-medium transition-colors min-h-[44px]',
                   granularity === g ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white'
                 )}
               >
@@ -536,7 +536,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
           <select
             value={chartView}
             onChange={(e) => setChartView(e.target.value as ChartView)}
-            className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white flex-1 min-w-[200px]"
+            className="px-3 py-2.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white flex-1 min-w-[200px] min-h-[44px]"
           >
             {CHART_VIEWS.map((m) => (
               <option key={m.value} value={m.value}>{m.label}</option>

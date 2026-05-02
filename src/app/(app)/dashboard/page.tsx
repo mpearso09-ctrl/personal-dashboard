@@ -133,7 +133,7 @@ function Section({ title, href, children }: { title: string; href: string; child
     <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-5">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-white">{title}</h2>
-        <Link href={href} className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
+        <Link href={href} className="text-sm text-blue-400 hover:text-blue-300 transition-colors py-2 px-1 -my-2 -mx-1 inline-flex items-center min-h-[44px]">
           View Details →
         </Link>
       </div>
@@ -277,7 +277,7 @@ function FitnessSection({
           <button
             onClick={() => setViewUserId(userId)}
             className={cn(
-              'px-3 py-1 rounded-full text-sm font-medium transition-colors',
+              'px-3 py-2.5 rounded-full text-sm font-medium transition-colors min-h-[44px]',
               !viewingOther ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white',
             )}
           >
@@ -286,7 +286,7 @@ function FitnessSection({
           <button
             onClick={() => setViewUserId(otherUser.id)}
             className={cn(
-              'px-3 py-1 rounded-full text-sm font-medium transition-colors',
+              'px-3 py-2.5 rounded-full text-sm font-medium transition-colors min-h-[44px]',
               viewingOther ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white',
             )}
           >
@@ -735,7 +735,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Two-column grid */}
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <FitnessSection userId={user.id} householdUsers={householdUsers} />
         {householdId ? (
           <FinanceSection householdId={householdId} />

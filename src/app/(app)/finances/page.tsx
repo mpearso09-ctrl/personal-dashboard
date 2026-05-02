@@ -254,7 +254,7 @@ function InputField({
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
       />
     </div>
   );
@@ -287,7 +287,7 @@ function SaveButton({ saving, onClick }: { saving: boolean; onClick: () => void 
     <button
       onClick={onClick}
       disabled={saving}
-      className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+      className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-3 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
     >
       {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
       {saving ? 'Saving...' : 'Save'}
@@ -364,7 +364,7 @@ export default function FinancesPage() {
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={cn(
-              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors',
+              'flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors min-h-[44px]',
               activeTab === tab
                 ? 'bg-blue-600 text-white'
                 : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
@@ -632,7 +632,7 @@ function IncomeTab({
       <div className="flex justify-end">
         <button
           onClick={() => setShowSettings(!showSettings)}
-          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px] px-2"
         >
           <Settings className="w-4 h-4" />
           {showSettings ? 'Hide Settings' : 'Manage Categories'}
@@ -674,15 +674,15 @@ function IncomeTab({
                       {deleteConfirm === cat.id ? (
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-red-400">Delete?</span>
-                          <button onClick={() => deleteCategory(cat.id)} className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors">
+                          <button onClick={() => deleteCategory(cat.id)} className="p-2.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center">
                             <Check className="w-3 h-3" />
                           </button>
-                          <button onClick={() => setDeleteConfirm(null)} className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors">
+                          <button onClick={() => setDeleteConfirm(null)} className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center">
                             <X className="w-3 h-3" />
                           </button>
                         </div>
                       ) : (
-                        <button onClick={() => setDeleteConfirm(cat.id)} className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors">
+                        <button onClick={() => setDeleteConfirm(cat.id)} className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center">
                           <Trash2 className="w-3 h-3" />
                         </button>
                       )}
@@ -705,7 +705,7 @@ function IncomeTab({
               <button
                 onClick={addCategory}
                 disabled={!newCatName.trim()}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
               >
                 <Plus className="w-4 h-4" />
                 Add
@@ -764,7 +764,7 @@ function IncomeTab({
                       {canEdit && isCurrentWeek && (
                         <button
                           onClick={() => setOpenCategoryId(isOpen ? null : cat.id)}
-                          className="p-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-400 hover:text-white transition-colors"
+                          className="p-2.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                           title="Add income entry"
                         >
                           <Plus className="w-3 h-3" />
@@ -776,12 +776,13 @@ function IncomeTab({
                   {/* Inline add-entry form */}
                   {isOpen && (
                     <div className="mt-2 pt-2 border-t border-zinc-700">
-                      <div className="flex items-end gap-2">
-                        <div className="flex flex-col gap-1 w-32">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="flex flex-col gap-1 w-32 min-w-[8rem]">
                           <label className="text-xs text-zinc-400">Amount ($)</label>
                           <input
                             autoFocus
                             type="number"
+                            inputMode="decimal"
                             step="0.01"
                             placeholder="0.00"
                             value={addAmounts[cat.id] || ''}
@@ -790,10 +791,10 @@ function IncomeTab({
                               if (e.key === 'Enter') await handleAddEntry(cat.id);
                               if (e.key === 'Escape') setOpenCategoryId(null);
                             }}
-                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors min-h-[44px]"
                           />
                         </div>
-                        <div className="flex flex-col gap-1 flex-1">
+                        <div className="flex flex-col gap-1 flex-1 min-w-[8rem]">
                           <label className="text-xs text-zinc-400">Notes (optional)</label>
                           <input
                             type="text"
@@ -804,20 +805,20 @@ function IncomeTab({
                               if (e.key === 'Enter') await handleAddEntry(cat.id);
                               if (e.key === 'Escape') setOpenCategoryId(null);
                             }}
-                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors min-h-[44px]"
                           />
                         </div>
                         <button
                           onClick={() => handleAddEntry(cat.id)}
                           disabled={addSaving || !addAmounts[cat.id] || parseFloat(addAmounts[cat.id]) <= 0}
-                          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors h-[34px]"
+                          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-2.5 rounded-lg text-xs font-medium transition-colors min-h-[44px]"
                         >
                           {addSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
                           Save
                         </button>
                         <button
                           onClick={() => setOpenCategoryId(null)}
-                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors h-[34px]"
+                          className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                         >
                           <X className="w-3 h-3" />
                         </button>
@@ -838,7 +839,7 @@ function IncomeTab({
                           {canEdit && (
                             <button
                               onClick={() => handleDeleteEntry(entry.id)}
-                              className="p-1 rounded bg-zinc-700 hover:bg-red-600/20 text-zinc-500 hover:text-red-400 transition-colors"
+                              className="p-2 rounded bg-zinc-700 hover:bg-red-600/20 text-zinc-500 hover:text-red-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
@@ -1115,7 +1116,7 @@ function BudgetTab({
       <div className="flex justify-end">
         <button
           onClick={() => setShowSettings(!showSettings)}
-          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px] px-2"
         >
           <Settings className="w-4 h-4" />
           {showSettings ? 'Hide Settings' : 'Manage Categories'}
@@ -1169,15 +1170,15 @@ function BudgetTab({
                       {deleteConfirm === cat.id ? (
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-red-400">Delete?</span>
-                          <button onClick={() => deleteCategory(cat.id)} className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors">
+                          <button onClick={() => deleteCategory(cat.id)} className="p-2.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center">
                             <Check className="w-3 h-3" />
                           </button>
-                          <button onClick={() => setDeleteConfirm(null)} className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors">
+                          <button onClick={() => setDeleteConfirm(null)} className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center">
                             <X className="w-3 h-3" />
                           </button>
                         </div>
                       ) : (
-                        <button onClick={() => setDeleteConfirm(cat.id)} className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors">
+                        <button onClick={() => setDeleteConfirm(cat.id)} className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center">
                           <Trash2 className="w-3 h-3" />
                         </button>
                       )}
@@ -1207,7 +1208,7 @@ function BudgetTab({
               <button
                 onClick={addCategory}
                 disabled={!newCatName.trim() || newCatAmount <= 0}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
               >
                 <Plus className="w-4 h-4" />
                 Add
@@ -1269,7 +1270,7 @@ function BudgetTab({
                       {canEdit && isCurrentWeek && (
                         <button
                           onClick={() => setOpenCategoryId(isOpen ? null : cat.id)}
-                          className="p-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-400 hover:text-white transition-colors"
+                          className="p-2.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                           title="Add spending entry"
                         >
                           <Plus className="w-3 h-3" />
@@ -1290,12 +1291,13 @@ function BudgetTab({
                   {/* Inline add-entry form */}
                   {isOpen && (
                     <div className="mt-2 pt-2 border-t border-zinc-700">
-                      <div className="flex items-end gap-2">
-                        <div className="flex flex-col gap-1 w-32">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="flex flex-col gap-1 w-32 min-w-[8rem]">
                           <label className="text-xs text-zinc-400">Amount ($)</label>
                           <input
                             autoFocus
                             type="number"
+                            inputMode="decimal"
                             step="0.01"
                             placeholder="0.00"
                             value={addAmounts[cat.id] || ''}
@@ -1304,10 +1306,10 @@ function BudgetTab({
                               if (e.key === 'Enter') await handleAddEntry(cat.id);
                               if (e.key === 'Escape') setOpenCategoryId(null);
                             }}
-                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors min-h-[44px]"
                           />
                         </div>
-                        <div className="flex flex-col gap-1 flex-1">
+                        <div className="flex flex-col gap-1 flex-1 min-w-[8rem]">
                           <label className="text-xs text-zinc-400">Notes (optional)</label>
                           <input
                             type="text"
@@ -1318,20 +1320,20 @@ function BudgetTab({
                               if (e.key === 'Enter') await handleAddEntry(cat.id);
                               if (e.key === 'Escape') setOpenCategoryId(null);
                             }}
-                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors min-h-[44px]"
                           />
                         </div>
                         <button
                           onClick={() => handleAddEntry(cat.id)}
                           disabled={addSaving || !addAmounts[cat.id] || parseFloat(addAmounts[cat.id]) <= 0}
-                          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors h-[34px]"
+                          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-2.5 rounded-lg text-xs font-medium transition-colors min-h-[44px]"
                         >
                           {addSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
                           Save
                         </button>
                         <button
                           onClick={() => setOpenCategoryId(null)}
-                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors h-[34px]"
+                          className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                         >
                           <X className="w-3 h-3" />
                         </button>
@@ -1352,7 +1354,7 @@ function BudgetTab({
                           {canEdit && (
                             <button
                               onClick={() => handleDeleteEntry(entry.id)}
-                              className="p-1 rounded bg-zinc-700 hover:bg-red-600/20 text-zinc-500 hover:text-red-400 transition-colors"
+                              className="p-2 rounded bg-zinc-700 hover:bg-red-600/20 text-zinc-500 hover:text-red-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
@@ -1601,7 +1603,7 @@ function CashFlowTab({
       <div className="flex justify-end">
         <button
           onClick={() => setShowSettings(!showSettings)}
-          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px] px-2"
         >
           <Settings className="w-4 h-4" />
           {showSettings ? 'Hide Settings' : 'Manage Accounts'}
@@ -1650,13 +1652,13 @@ function CashFlowTab({
                           <span className="text-xs text-red-400">Delete?</span>
                           <button
                             onClick={() => deleteAccount(acc.id)}
-                            className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                            className="p-2.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                           >
                             <Check className="w-3 h-3" />
                           </button>
                           <button
                             onClick={() => setDeleteConfirm(null)}
-                            className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                            className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                           >
                             <X className="w-3 h-3" />
                           </button>
@@ -1664,7 +1666,7 @@ function CashFlowTab({
                       ) : (
                         <button
                           onClick={() => setDeleteConfirm(acc.id)}
-                          className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                          className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -1689,7 +1691,7 @@ function CashFlowTab({
               <button
                 onClick={addAccount}
                 disabled={!newAccountName.trim()}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
               >
                 <Plus className="w-4 h-4" />
                 Add
@@ -2005,7 +2007,7 @@ function ReimbursementsTab({
             <button
               onClick={handleAdd}
               disabled={saving || !form.reason || form.amount <= 0}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-3 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
             >
               {saving ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -2066,7 +2068,7 @@ function ReimbursementsTab({
                   <button
                     onClick={() => togglePaid(r.id, r.paid)}
                     className={cn(
-                      'p-1.5 rounded-lg transition-colors',
+                      'p-2.5 rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center',
                       r.paid
                         ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-400'
                         : 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400'
@@ -2283,13 +2285,13 @@ function NetWorthTab({
                     <span className="text-xs text-red-400">Delete?</span>
                     <button
                       onClick={() => deleteItem(item.id)}
-                      className="p-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors"
+                      className="p-2.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                     >
                       <Check className="w-3 h-3" />
                     </button>
                     <button
                       onClick={() => setDeleteConfirm(null)}
-                      className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                      className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                     >
                       <X className="w-3 h-3" />
                     </button>
@@ -2297,7 +2299,7 @@ function NetWorthTab({
                 ) : (
                   <button
                     onClick={() => setDeleteConfirm(item.id)}
-                    className="p-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors"
+                    className="p-2.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-400 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
                   >
                     <Trash2 className="w-3 h-3" />
                   </button>
@@ -2313,7 +2315,7 @@ function NetWorthTab({
   return (
     <div className="space-y-6">
       {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 sm:grid-cols-3 gap-3 sm:gap-4">
         <Card>
           <div className="text-xs text-zinc-400 mb-1">Total Assets</div>
           <div className="text-xl font-bold text-emerald-400">
@@ -2343,7 +2345,7 @@ function NetWorthTab({
       <div className="flex justify-end">
         <button
           onClick={() => setShowSettings(!showSettings)}
-          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+          className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px] px-2"
         >
           <Settings className="w-4 h-4" />
           {showSettings ? 'Hide Settings' : 'Manage Items'}
@@ -2395,7 +2397,7 @@ function NetWorthTab({
                 <select
                   value={newItemType}
                   onChange={(e) => setNewItemType(e.target.value as 'asset' | 'liability')}
-                  className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors"
+                  className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors min-h-[44px]"
                 >
                   <option value="asset">Asset</option>
                   <option value="liability">Liability</option>
@@ -2404,7 +2406,7 @@ function NetWorthTab({
               <button
                 onClick={addItem}
                 disabled={!newItemName.trim()}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors h-[38px]"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
               >
                 <Plus className="w-4 h-4" />
                 Add
@@ -2757,14 +2759,15 @@ function InvestmentsTab({
             {g.holdings.map((h) => (
               <div
                 key={h.id}
-                className="flex items-center gap-3 bg-zinc-800 rounded-lg p-3"
+                className="flex items-center gap-2 bg-zinc-800 rounded-lg p-3"
               >
-                <div className="w-16 text-sm font-mono font-semibold text-white">
+                <div className="w-12 text-sm font-mono font-semibold text-white shrink-0">
                   {h.symbol}
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.01"
                     value={editValues[h.id] ?? ''}
                     disabled={!canEdit}
@@ -2775,19 +2778,19 @@ function InvestmentsTab({
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') updateValue(h.id);
                     }}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
                   />
                 </div>
-                <div className="text-xs text-zinc-500 w-20 text-right">
+                <div className="hidden sm:block text-xs text-zinc-500 w-20 text-right shrink-0">
                   Target: {h.target_pct}%
                 </div>
-                <div className="text-xs text-zinc-400 w-16 text-right">
+                <div className="text-xs text-zinc-400 w-12 text-right shrink-0">
                   {totalValue > 0
                     ? ((h.current_value_cad / totalValue) * 100).toFixed(1) + '%'
                     : '0%'}
                 </div>
                 {savingId === h.id && (
-                  <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />
                 )}
               </div>
             ))}

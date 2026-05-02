@@ -15,6 +15,7 @@ import {
   Moon,
   Menu,
   X,
+  Zap,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -22,6 +23,7 @@ import { cn } from '@/lib/utils';
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/fitness', label: 'Fitness', icon: Dumbbell },
+  { href: '/training', label: 'Training', icon: Zap },
   { href: '/finances', label: 'Finances', icon: DollarSign },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];

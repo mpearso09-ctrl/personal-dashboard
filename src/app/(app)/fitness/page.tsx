@@ -419,10 +419,10 @@ export default function FitnessPage() {
         )}
 
         {/* Date selector */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <button
             onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
-            className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+            className="p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 min-h-[44px] min-w-[44px] flex items-center justify-center"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -430,17 +430,17 @@ export default function FitnessPage() {
             type="date"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm"
+            className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm min-h-[44px]"
           />
           <button
             onClick={() => setSelectedDate(shiftDate(selectedDate, 1))}
-            className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+            className="p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 min-h-[44px] min-w-[44px] flex items-center justify-center"
           >
             <ChevronRight className="h-4 w-4" />
           </button>
           <button
             onClick={() => setSelectedDate(getToday())}
-            className="text-sm text-blue-400 hover:text-blue-300 ml-2"
+            className="text-sm text-blue-400 hover:text-blue-300 ml-1 min-h-[44px] px-2 flex items-center"
           >
             Today
           </button>
@@ -470,7 +470,7 @@ export default function FitnessPage() {
                   }))
                 }
                 disabled={isViewingOther}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50 min-h-[44px]"
                 placeholder="-- (optional)"
               />
             </div>
@@ -482,6 +482,7 @@ export default function FitnessPage() {
               </label>
               <input
                 type="number"
+                inputMode="decimal"
                 step="0.1"
                 value={dailyForm.body_fat_pct ?? ''}
                 onChange={(e) =>
@@ -491,7 +492,7 @@ export default function FitnessPage() {
                   }))
                 }
                 disabled={isViewingOther}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50 min-h-[44px]"
                 placeholder="-- (optional)"
               />
             </div>
@@ -529,9 +530,10 @@ export default function FitnessPage() {
 
                     {/* Add input + button (hidden when viewing other user) */}
                     {!isViewingOther && (
-                      <div className="flex items-center gap-1 ml-auto shrink-0">
+                      <div className="flex items-center gap-1.5 ml-auto shrink-0">
                         <input
                           type="number"
+                          inputMode="numeric"
                           value={addVal}
                           onChange={(e) =>
                             setAddAmounts((prev) => ({ ...prev, [f.name]: e.target.value }))
@@ -542,13 +544,13 @@ export default function FitnessPage() {
                               addToCumulative(f.name);
                             }
                           }}
-                          className="w-20 bg-zinc-900 border border-zinc-600 rounded px-2 py-1 text-sm text-white text-right placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none"
+                          className="w-20 bg-zinc-900 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white text-right placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none min-h-[44px]"
                           placeholder="0"
                         />
                         <button
                           onClick={() => addToCumulative(f.name)}
                           disabled={saving || !addVal}
-                          className="flex items-center justify-center h-7 w-7 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:hover:bg-blue-600 text-white transition-colors shrink-0"
+                          className="flex items-center justify-center h-11 w-11 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:hover:bg-blue-600 text-white transition-colors shrink-0"
                           title={`Add to ${f.label}`}
                         >
                           <Plus className="h-4 w-4" />
@@ -602,6 +604,7 @@ export default function FitnessPage() {
                   </label>
                   <input
                     type="number"
+                    inputMode="numeric"
                     value={val ?? ''}
                     onChange={(e) =>
                       setDailyForm((prev) => ({
@@ -611,7 +614,7 @@ export default function FitnessPage() {
                     }
                     disabled={isViewingOther}
                     className={cn(
-                      'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm disabled:opacity-50',
+                      'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm disabled:opacity-50 min-h-[44px]',
                       color
                     )}
                     placeholder="--"
@@ -636,7 +639,7 @@ export default function FitnessPage() {
                   }
                   disabled={isViewingOther}
                   className={cn(
-                    'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50',
+                    'flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 min-h-[44px]',
                     checked
                       ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
                       : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600'
@@ -690,7 +693,7 @@ export default function FitnessPage() {
               <button
                 onClick={saveDaily}
                 disabled={saving}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
               >
                 <Save className="h-4 w-4" />
                 {saving ? 'Saving...' : 'Save Entry'}
@@ -738,7 +741,7 @@ export default function FitnessPage() {
               onClick={() => setWeeklyForm((prev) => ({ ...prev, photo_taken: !prev.photo_taken }))}
               disabled={isViewingOther}
               className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50',
+                'flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 min-h-[44px]',
                 weeklyForm.photo_taken
                   ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
                   : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600'
@@ -759,7 +762,7 @@ export default function FitnessPage() {
               <button
                 onClick={saveWeekly}
                 disabled={saving}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
               >
                 <Save className="h-4 w-4" />
                 {saving ? 'Saving...' : 'Save'}
@@ -1009,7 +1012,7 @@ export default function FitnessPage() {
       )}
 
       {/* Tab bar */}
-      <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
+      <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 overflow-x-auto">
         {tabs.map((t) => {
           const Icon = t.icon;
           return (
@@ -1017,7 +1020,7 @@ export default function FitnessPage() {
               key={t.key}
               onClick={() => setActiveTab(t.key)}
               className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex-1 justify-center',
+                'flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex-1 justify-center whitespace-nowrap min-h-[44px]',
                 activeTab === t.key
                   ? 'bg-blue-600 text-white'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
@@ -1279,7 +1282,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
         <div className="flex items-center gap-3">
           <button
             onClick={() => setMilestoneScreen('results')}
-            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
+            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px] pr-3"
           >
             <ChevronLeft className="h-4 w-4" />
             Back to Results
@@ -1324,7 +1327,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
                             key={rm}
                             onClick={() => setEntryRepMax(rm)}
                             className={cn(
-                              'px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors',
+                              'px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors min-h-[44px]',
                               entryRepMax === rm
                                 ? 'bg-blue-600 border-blue-500 text-white'
                                 : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-500'
@@ -1372,14 +1375,14 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
                   </div>
 
                   {/* Date and notes */}
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs text-zinc-400 block mb-1">Date</label>
                       <input
                         type="date"
                         value={entryDate}
                         onChange={(e) => setEntryDate(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none min-h-[44px]"
                       />
                     </div>
                     <div>
@@ -1389,7 +1392,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
                         value={entryNotes}
                         onChange={(e) => setEntryNotes(e.target.value)}
                         placeholder="e.g. felt strong"
-                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none min-h-[44px]"
                       />
                     </div>
                   </div>
@@ -1398,7 +1401,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
                   <button
                     onClick={() => handleAddEntry(activeType.id)}
                     disabled={entrySaving || !entryValue}
-                    className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors"
+                    className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-3 rounded-lg text-sm font-semibold transition-colors min-h-[44px]"
                   >
                     <Save className="h-4 w-4" />
                     {entrySaving ? 'Saving...' : 'Save Entry'}
@@ -1452,7 +1455,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
         <div className="flex items-center gap-3">
           <button
             onClick={() => { setView('grid'); setSelectedType(null); }}
-            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
+            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px] pr-3"
           >
             <ChevronLeft className="h-4 w-4" />
             Back
@@ -1551,7 +1554,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
                       <td className="py-2 px-2 text-center">
                         <button
                           onClick={() => deleteEntry(entry.id)}
-                          className="text-zinc-600 hover:text-red-400 transition-colors"
+                          className="text-zinc-600 hover:text-red-400 transition-colors p-2 inline-flex items-center justify-center min-h-[44px] min-w-[44px]"
                           title="Delete entry"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -1796,13 +1799,13 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
             <div className="flex rounded-lg border border-zinc-700 overflow-hidden text-sm">
               <button
                 onClick={() => setMilestoneScreen('results')}
-                className={cn('px-3 py-1.5 transition-colors', milestoneScreen === 'results' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white')}
+                className={cn('px-3 py-2.5 transition-colors min-h-[44px]', milestoneScreen === 'results' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white')}
               >
                 Results
               </button>
               <button
                 onClick={() => { setMilestoneScreen('log'); setEntryValue(''); }}
-                className={cn('px-3 py-1.5 transition-colors', milestoneScreen === 'log' ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white')}
+                className={cn('px-3 py-2.5 transition-colors min-h-[44px]', milestoneScreen === 'log' ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white')}
               >
                 <span className="flex items-center gap-1"><Plus className="h-3.5 w-3.5" />Log Entry</span>
               </button>
@@ -1812,7 +1815,7 @@ function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boo
             <button
               onClick={() => { setEditMode(!editMode); setShowAddType(false); }}
               className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors',
+                'flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm border transition-colors min-h-[44px]',
                 editMode
                   ? 'bg-blue-600/20 border-blue-500/40 text-blue-400'
                   : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white'

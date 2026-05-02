@@ -271,6 +271,313 @@ export const DEFAULT_CARDIO_MILESTONES: { name: string; unit: 'seconds' | 'pace'
 
 export const REP_MAXES = [1, 2, 3, 4, 5, 10] as const;
 
+// ---- Training Program (per-user) ----
+
+export interface TrainingProgramSettings {
+  id: string;
+  user_id: string;
+  start_date: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrainingWorkout {
+  id: string;
+  user_id: string;
+  date: string;
+  week_number: number;
+  day_number: number;
+  day_name: string;
+  started_at: string | null;
+  completed_at: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface TrainingExercise {
+  id: string;
+  workout_id: string;
+  exercise_name: string;
+  exercise_order: number;
+  exercise_type: 'strength' | 'cardio' | 'circuit' | 'amrap' | 'intervals' | 'optional' | 'rest';
+}
+
+export interface TrainingSet {
+  id: string;
+  exercise_id: string;
+  set_number: number;
+  target_reps: number | null;
+  actual_reps: number | null;
+  target_weight: number | null;
+  actual_weight: number | null;
+  time_seconds: number | null;
+  distance_meters: number | null;
+  notes: string | null;
+  is_completed: boolean;
+  created_at: string;
+}
+
+// Static program definition (hardcoded 8-week HYROX plan)
+
+export type ExerciseType = 'strength' | 'cardio' | 'circuit' | 'amrap' | 'intervals' | 'optional' | 'rest';
+
+export interface ProgramSet {
+  targetReps?: number | 'max';
+  pctOf1RM?: number;          // e.g. 0.75 = 75%
+  perLeg?: boolean;
+}
+
+export interface ProgramExercise {
+  name: string;
+  type: ExerciseType;
+  milestoneMatch?: string;    // matches milestone_types.name for auto-PR
+  // Phase-differentiated config (weeks 1-4 vs 5-8)
+  phase1Sets?: ProgramSet[];
+  phase2Sets?: ProgramSet[];
+  // Simple (same both phases)
+  sets?: ProgramSet[];
+  // Timed/cardio
+  durationMin?: number;       // minutes
+  durationMinMax?: number;    // max minutes for range
+  distanceMeters?: number;
+  // AMRAP
+  amrapMinutes?: number;
+  // Intervals
+  intervalRounds?: [number, number]; // [min, max]
+  intervalDistanceMeters?: number;
+  intervalRestSec?: number;
+  // Notes
+  notes?: string;
+}
+
+export interface ProgramDay {
+  dayNumber: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  name: string;
+  focus: string;
+  color: string;              // tailwind text color class
+  exercises: ProgramExercise[];
+}
+
+// The full 8-week program (static)
+export const PROGRAM: ProgramDay[] = [
+  {
+    dayNumber: 1,
+    name: 'Day 1',
+    focus: 'Lower Body',
+    color: 'text-blue-400',
+    exercises: [
+      {
+        name: 'Back Squat',
+        type: 'strength',
+        milestoneMatch: 'Squat',
+        phase1Sets: [
+          { targetReps: 5, pctOf1RM: 0.75 },
+          { targetReps: 5, pctOf1RM: 0.75 },
+          { targetReps: 5, pctOf1RM: 0.75 },
+          { targetReps: 5, pctOf1RM: 0.75 },
+          { targetReps: 5, pctOf1RM: 0.75 },
+        ],
+        phase2Sets: [
+          { targetReps: 4, pctOf1RM: 0.825 },
+          { targetReps: 4, pctOf1RM: 0.825 },
+          { targetReps: 4, pctOf1RM: 0.825 },
+          { targetReps: 4, pctOf1RM: 0.825 },
+        ],
+      },
+      {
+        name: 'Romanian Deadlift',
+        type: 'strength',
+        milestoneMatch: 'Deadlift',
+        sets: [
+          { targetReps: 8 }, { targetReps: 8 }, { targetReps: 8 }, { targetReps: 8 },
+        ],
+      },
+      {
+        name: 'Walking Lunges',
+        type: 'strength',
+        sets: [
+          { targetReps: 12, perLeg: true },
+          { targetReps: 12, perLeg: true },
+          { targetReps: 12, perLeg: true },
+        ],
+      },
+      {
+        name: 'Box Jumps',
+        type: 'strength',
+        sets: [
+          { targetReps: 5 }, { targetReps: 5 }, { targetReps: 5 }, { targetReps: 5 },
+        ],
+      },
+      {
+        name: 'Finisher (AMRAP)',
+        type: 'amrap',
+        amrapMinutes: 10,
+        notes: '10 cal row → 10 air squats → 10 sit-ups',
+      },
+    ],
+  },
+  {
+    dayNumber: 2,
+    name: 'Day 2',
+    focus: 'Upper + HYROX',
+    color: 'text-purple-400',
+    exercises: [
+      {
+        name: 'Bench Press',
+        type: 'strength',
+        milestoneMatch: 'Bench Press',
+        sets: [
+          { targetReps: 5 }, { targetReps: 5 }, { targetReps: 5 }, { targetReps: 5 }, { targetReps: 5 },
+        ],
+      },
+      {
+        name: 'Pull-ups',
+        type: 'strength',
+        sets: [
+          { targetReps: 'max' }, { targetReps: 'max' }, { targetReps: 'max' }, { targetReps: 'max' },
+        ],
+      },
+      {
+        name: 'Shoulder Press',
+        type: 'strength',
+        milestoneMatch: 'Shoulder Press',
+        sets: [
+          { targetReps: 6 }, { targetReps: 6 }, { targetReps: 6 }, { targetReps: 6 },
+        ],
+      },
+      {
+        name: 'DB Rows',
+        type: 'strength',
+        sets: [
+          { targetReps: 10 }, { targetReps: 10 }, { targetReps: 10 },
+        ],
+      },
+      {
+        name: 'HYROX Circuit',
+        type: 'circuit',
+        notes: '3-4 rounds: 500m Ski Erg → 20 Push-ups → 20 Wall Balls / DB Thrusters → 20 Walking Lunges',
+      },
+    ],
+  },
+  {
+    dayNumber: 3,
+    name: 'Day 3',
+    focus: 'Zone 2 + Core',
+    color: 'text-emerald-400',
+    exercises: [
+      {
+        name: 'Zone 2 Run',
+        type: 'cardio',
+        durationMin: 45,
+        durationMinMax: 60,
+        notes: 'Steady easy pace — conversational effort',
+      },
+      {
+        name: 'Core Circuit',
+        type: 'circuit',
+        notes: '3-4 rounds: Plank (max hold) → 15 Hanging Knee Raises → 20 Russian Twists',
+      },
+    ],
+  },
+  {
+    dayNumber: 4,
+    name: 'Day 4',
+    focus: 'Power + Intervals',
+    color: 'text-orange-400',
+    exercises: [
+      {
+        name: 'Power Cleans',
+        type: 'strength',
+        milestoneMatch: 'Power Clean',
+        sets: [
+          { targetReps: 3 }, { targetReps: 3 }, { targetReps: 3 }, { targetReps: 3 }, { targetReps: 3 },
+        ],
+      },
+      {
+        name: 'Deadlift',
+        type: 'strength',
+        milestoneMatch: 'Deadlift',
+        sets: [
+          { targetReps: 5, pctOf1RM: 0.75 },
+          { targetReps: 5, pctOf1RM: 0.75 },
+          { targetReps: 5, pctOf1RM: 0.75 },
+          { targetReps: 5, pctOf1RM: 0.75 },
+        ],
+      },
+      {
+        name: 'Push Press',
+        type: 'strength',
+        milestoneMatch: 'Push Press',
+        sets: [
+          { targetReps: 5 }, { targetReps: 5 }, { targetReps: 5 }, { targetReps: 5 },
+        ],
+      },
+      {
+        name: 'Box Step-ups (weighted)',
+        type: 'strength',
+        sets: [
+          { targetReps: 12, perLeg: true },
+          { targetReps: 12, perLeg: true },
+          { targetReps: 12, perLeg: true },
+        ],
+      },
+      {
+        name: '400m Run Intervals',
+        type: 'intervals',
+        intervalRounds: [6, 8],
+        intervalDistanceMeters: 400,
+        intervalRestSec: 90,
+        notes: '6-8 rounds, 90 sec rest between each',
+      },
+    ],
+  },
+  {
+    dayNumber: 5,
+    name: 'Day 5',
+    focus: 'HYROX Simulation',
+    color: 'text-red-400',
+    exercises: [
+      { name: 'HYROX Simulation (Full)', type: 'cardio',
+        notes: '1KM Run → 1KM Ski Erg → 1KM Run → 50 DB Lunges → 1KM Run → 50 Burpee Broad Jumps → 1KM Run → 1KM Row. Track TOTAL TIME.',
+      },
+    ],
+  },
+  {
+    dayNumber: 6,
+    name: 'Day 6',
+    focus: 'Optional',
+    color: 'text-zinc-400',
+    exercises: [
+      {
+        name: 'Option A: Long Run',
+        type: 'optional',
+        durationMin: 60,
+        durationMinMax: 75,
+        notes: 'Easy pace, track time and distance',
+      },
+      {
+        name: 'Option B: Bodyweight Conditioning',
+        type: 'optional',
+        notes: '5 rounds: 20 Push-ups → 20 Air Squats → 10 Pull-ups → 400m Run',
+      },
+    ],
+  },
+  {
+    dayNumber: 7,
+    name: 'Day 7',
+    focus: 'Rest & Recovery',
+    color: 'text-zinc-500',
+    exercises: [
+      {
+        name: 'Rest Day',
+        type: 'rest',
+        notes: 'Walk / Mobility / Stretch. No structured training.',
+      },
+    ],
+  },
+];
+
 export const DEFAULT_INCOME_CATEGORIES = [
   'Protocase Salary',
   'Frameworks Revenue',

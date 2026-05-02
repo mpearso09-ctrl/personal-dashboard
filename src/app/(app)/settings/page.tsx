@@ -172,7 +172,7 @@ export default function SettingsPage() {
                         <button
                           onClick={() => updateMemberRole(member.id, member.finance_role === 'full_access' ? 'view_only' : 'full_access')}
                           className={cn(
-                            'flex items-center gap-1 px-3 py-1 rounded text-xs font-medium border transition-colors',
+                            'flex items-center gap-1 px-3 py-2.5 rounded text-xs font-medium border transition-colors min-h-[44px]',
                             member.finance_role === 'full_access'
                               ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
                               : 'bg-zinc-800 border-zinc-700 text-zinc-400'
@@ -183,7 +183,7 @@ export default function SettingsPage() {
                         </button>
                         <button
                           onClick={() => removeMember(member.id, member.user_id)}
-                          className="text-xs text-zinc-600 hover:text-red-400"
+                          className="text-xs text-zinc-600 hover:text-red-400 min-h-[44px] px-2 flex items-center"
                         >
                           Remove
                         </button>
@@ -261,7 +261,7 @@ export default function SettingsPage() {
       <button
         onClick={handleSave}
         disabled={saving}
-        className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-lg transition-colors"
+        className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-lg transition-colors min-h-[44px]"
       >
         {saved ? <Check size={18} /> : <Save size={18} />}
         {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Settings'}
@@ -288,10 +288,11 @@ function Field({
       <label className="block text-sm font-medium text-zinc-400 mb-1">{label}</label>
       <input
         type={type}
+        inputMode={type === 'number' ? 'numeric' : undefined}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         step={step}
-        className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        className="w-full px-3 py-2.5 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent min-h-[44px]"
       />
     </div>
   );
