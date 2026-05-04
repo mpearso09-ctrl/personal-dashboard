@@ -34,15 +34,21 @@ import {
 // Helper functions
 // ---------------------------------------------------------------------------
 
-function getProgramDay(startDate: string): { week: number; day: number; totalDay: number } {
+function getProgramDay(startDate: string, targetDate?: string): { week: number; day: number; totalDay: number } {
   const start = new Date(startDate + 'T00:00:00');
-  const today = new Date(getToday() + 'T00:00:00');
-  const daysSinceStart = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  const target = new Date((targetDate ?? getToday()) + 'T00:00:00');
+  const daysSinceStart = Math.floor((target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
   if (daysSinceStart < 0) return { week: 1, day: 1, totalDay: 0 };
   const totalDay = daysSinceStart + 1;
   const weekIndex = Math.floor(daysSinceStart / 7) % 8;
   const dayIndex = daysSinceStart % 7;
   return { week: weekIndex + 1, day: dayIndex + 1, totalDay };
+}
+
+function shiftDate(dateStr: string, days: number): string {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
 }
 
 function roundToFive(n: number): number {
@@ -128,6 +134,17 @@ export default function TrainingPage() {
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [startDateInput, setStartDateInput] = useState(getToday());
   const [savingSettings, setSavingSettings] = useState(false);
+  const [editingStartDate, setEditingStartDate] = useState(false);
+  const [newStartDateInput, setNewStartDateInput] = useState('');
+
+  // Date navigation — which day we're viewing/logging
+  const [selectedTrainingDate, setSelectedTrainingDate] = useState(getToday());
+
+  // Calendar month for Program tab (YYYY-MM)
+  const [calendarMonth, setCalendarMonth] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   // Today's workout DB state
   const [todayWorkout, setTodayWorkout] = useState<TrainingWorkout | null>(null);
@@ -221,16 +238,15 @@ export default function TrainingPage() {
   const fetchTodayWorkout = useCallback(async () => {
     if (!user || !settings) return;
     setWorkoutLoading(true);
-    const today = getToday();
     const { data } = await supabase
       .from('training_workouts')
       .select('*')
       .eq('user_id', user.id)
-      .eq('date', today)
+      .eq('date', selectedTrainingDate)
       .single();
     setTodayWorkout(data ?? null);
     setWorkoutLoading(false);
-  }, [user, settings]);
+  }, [user, settings, selectedTrainingDate]);
 
   const fetch1RMs = useCallback(async (programDay: ProgramDay) => {
     if (!user) return;
@@ -291,8 +307,10 @@ export default function TrainingPage() {
 
   useEffect(() => {
     if (!user || !settings) return;
+    setWorkoutStarted(false);
+    setExercises([]);
     fetchTodayWorkout();
-  }, [user, settings, fetchTodayWorkout]);
+  }, [user, settings, fetchTodayWorkout, selectedTrainingDate]);
 
   useEffect(() => {
     if (!user || !settings) return;
@@ -371,14 +389,12 @@ export default function TrainingPage() {
 
   async function startWorkout() {
     if (!user || !settings) return;
-    const { week, day } = getProgramDay(settings.start_date);
+    const { week, day } = getProgramDay(settings.start_date, selectedTrainingDate);
     const programDay = PROGRAM[(day - 1) % 7];
 
     await fetch1RMs(programDay);
-    // Re-read cache after fetch (it's async; use a local fetch instead)
     const orCache = await buildOneRMCache(programDay);
 
-    const today = getToday();
     let workout = todayWorkout;
 
     if (!workout) {
@@ -386,7 +402,7 @@ export default function TrainingPage() {
         .from('training_workouts')
         .upsert({
           user_id: user.id,
-          date: today,
+          date: selectedTrainingDate,
           week_number: week,
           day_number: day,
           day_name: programDay.name,
@@ -456,15 +472,14 @@ export default function TrainingPage() {
     if (!user || !settings) return null;
     if (todayWorkout?.id) return todayWorkout.id;
 
-    const { week, day } = getProgramDay(settings.start_date);
+    const { week, day } = getProgramDay(settings.start_date, selectedTrainingDate);
     const programDay = PROGRAM[(day - 1) % 7];
-    const today = getToday();
 
     const { data } = await supabase
       .from('training_workouts')
       .upsert({
         user_id: user.id,
-        date: today,
+        date: selectedTrainingDate,
         week_number: week,
         day_number: day,
         day_name: programDay.name,
@@ -646,7 +661,7 @@ export default function TrainingPage() {
             milestone_type_id: types.id,
             rep_max: r <= 10 ? r : null,
             value: w,
-            date: getToday(),
+            date: selectedTrainingDate,
             is_pr: true,
           });
           newPRs.push(`${name} ${r}RM: ${w} lbs`);
@@ -681,6 +696,24 @@ export default function TrainingPage() {
       .select()
       .single();
     setSettings(data ?? null);
+    setSavingSettings(false);
+  }
+
+  async function changeStartDate() {
+    if (!user || !newStartDateInput) return;
+    setSavingSettings(true);
+    const { data } = await supabase
+      .from('training_program_settings')
+      .upsert({
+        user_id: user.id,
+        start_date: newStartDateInput,
+        is_active: true,
+      }, { onConflict: 'user_id' })
+      .select()
+      .single();
+    setSettings(data ?? null);
+    setEditingStartDate(false);
+    setNewStartDateInput('');
     setSavingSettings(false);
   }
 
@@ -729,9 +762,11 @@ export default function TrainingPage() {
   // Derived
   // ---------------------------------------------------------------------------
 
-  const programInfo = settings ? getProgramDay(settings.start_date) : null;
+  const programInfo = settings ? getProgramDay(settings.start_date, selectedTrainingDate) : null;
   const todayProgramDay = programInfo ? PROGRAM[(programInfo.day - 1) % 7] : null;
   const isPhase2 = programInfo ? programInfo.week >= 5 : false;
+  const isViewingPast = selectedTrainingDate < getToday();
+  const isViewingFuture = selectedTrainingDate > getToday();
   const phaseLabel = isPhase2 ? 'Push Phase' : 'Build Phase';
   const phaseColor = isPhase2 ? 'bg-red-600/20 text-red-400 border-red-600/30' : 'bg-blue-600/20 text-blue-400 border-blue-600/30';
   const alreadyCompleted = !!todayWorkout?.completed_at;
@@ -1324,26 +1359,99 @@ export default function TrainingPage() {
 
     if (!programInfo || !todayProgramDay) return null;
 
+    // Shared date nav + header block
+    const dateNavBlock = (
+      <div className="space-y-3">
+        {/* Date navigation */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setSelectedTrainingDate((d) => shiftDate(d, -1))}
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <div className="flex-1 text-center">
+            <span className="text-base font-semibold text-white">
+              {selectedTrainingDate === getToday()
+                ? 'Today'
+                : isViewingPast
+                ? formatDate(selectedTrainingDate)
+                : formatDate(selectedTrainingDate)}
+            </span>
+            {selectedTrainingDate !== getToday() && (
+              <button
+                onClick={() => setSelectedTrainingDate(getToday())}
+                className="ml-2 text-xs text-blue-400 hover:text-blue-300 underline"
+              >
+                Back to today
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setSelectedTrainingDate((d) => shiftDate(d, 1))}
+            disabled={selectedTrainingDate >= getToday()}
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Week/day header + change start date */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xl font-bold text-white">
+                Week {programInfo.week} · Day {programInfo.day}
+              </span>
+              <span className={cn('text-xs px-2 py-1 rounded-full border font-medium', phaseColor)}>
+                {phaseLabel}
+              </span>
+            </div>
+            <p className={cn('text-sm font-medium mt-0.5', todayProgramDay.color)}>
+              {todayProgramDay.focus}
+            </p>
+          </div>
+          <button
+            onClick={() => { setEditingStartDate(true); setNewStartDateInput(settings!.start_date); }}
+            className="text-xs text-zinc-500 hover:text-zinc-300 border border-zinc-700 rounded-lg px-3 py-2 min-h-[44px] transition-colors"
+          >
+            Started {formatDate(settings!.start_date)}
+          </button>
+        </div>
+
+        {/* Change start date inline form */}
+        {editingStartDate && (
+          <div className="flex items-center gap-2 bg-zinc-800/60 border border-zinc-700 rounded-xl p-3">
+            <span className="text-xs text-zinc-400 shrink-0">New start date:</span>
+            <input
+              type="date"
+              value={newStartDateInput}
+              onChange={(e) => setNewStartDateInput(e.target.value)}
+              className="flex-1 bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white min-h-[44px] focus:border-blue-500 focus:outline-none"
+            />
+            <button
+              onClick={changeStartDate}
+              disabled={savingSettings || !newStartDateInput}
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium min-h-[44px] transition-colors"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => setEditingStartDate(false)}
+              className="text-zinc-400 hover:text-white px-3 py-2 rounded-lg text-sm min-h-[44px] transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+    );
+
     // Rest day — no workout tracker needed
     if (todayProgramDay.exercises[0]?.type === 'rest') {
       return (
         <div className="space-y-4">
-          {/* Header */}
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xl font-bold text-white">
-                  Week {programInfo.week} · Day {programInfo.day}
-                </span>
-                <span className={cn('text-xs px-2 py-1 rounded-full border font-medium', phaseColor)}>
-                  {phaseLabel}
-                </span>
-              </div>
-              <p className={cn('text-sm font-medium mt-0.5', todayProgramDay.color)}>
-                {todayProgramDay.focus}
-              </p>
-            </div>
-          </div>
+          {dateNavBlock}
           <Card className="border-zinc-800">
             <div className="flex items-center gap-4 py-4">
               <span className="text-5xl">🛌</span>
@@ -1367,22 +1475,7 @@ export default function TrainingPage() {
 
       return (
         <div className="space-y-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xl font-bold text-white">
-                  Week {programInfo.week} · Day {programInfo.day}
-                </span>
-                <span className={cn('text-xs px-2 py-1 rounded-full border font-medium', phaseColor)}>
-                  {phaseLabel}
-                </span>
-              </div>
-              <p className={cn('text-sm font-medium mt-0.5', todayProgramDay.color)}>
-                {todayProgramDay.focus}
-              </p>
-            </div>
-          </div>
-
+          {dateNavBlock}
           <Card className="border-emerald-800/50 bg-emerald-950/20">
             <div className="flex items-center gap-3 mb-3">
               <CheckCircle2 className="h-7 w-7 text-emerald-400" />
@@ -1417,22 +1510,7 @@ export default function TrainingPage() {
     if (!workoutStarted) {
       return (
         <div className="space-y-4">
-          {/* Header */}
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xl font-bold text-white">
-                  Week {programInfo.week} · Day {programInfo.day}
-                </span>
-                <span className={cn('text-xs px-2 py-1 rounded-full border font-medium', phaseColor)}>
-                  {phaseLabel}
-                </span>
-              </div>
-              <p className={cn('text-sm font-medium mt-0.5', todayProgramDay.color)}>
-                {todayProgramDay.focus}
-              </p>
-            </div>
-          </div>
+          {dateNavBlock}
 
           {/* Exercise preview */}
           <Card>
@@ -1487,23 +1565,7 @@ export default function TrainingPage() {
     // Active workout tracker
     return (
       <div className="space-y-4">
-        {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-lg font-bold text-white">
-                Week {programInfo.week} · Day {programInfo.day}
-              </span>
-              <span className={cn('text-xs px-2 py-1 rounded-full border font-medium', phaseColor)}>
-                {phaseLabel}
-              </span>
-            </div>
-            <p className={cn('text-sm font-medium mt-0.5', todayProgramDay.color)}>
-              {todayProgramDay.focus}
-            </p>
-          </div>
-          <Zap className="h-6 w-6 text-yellow-400" />
-        </div>
+        {dateNavBlock}
 
         {/* Exercise blocks */}
         {exercises.map((ex, idx) => renderExerciseBlock(ex, idx))}
@@ -1636,16 +1698,22 @@ export default function TrainingPage() {
 
                         return (
                           <td key={day.dayNumber} className="py-2 px-1 text-center">
-                            <div className={cn(
-                              'w-8 h-8 mx-auto rounded-lg flex items-center justify-center text-[11px] font-medium transition-colors',
-                              isToday && !isCompleted && 'bg-blue-600 text-white ring-2 ring-blue-400',
-                              isCompleted && 'bg-emerald-700/40 text-emerald-400',
-                              isPast && !isCompleted && !isRest && 'bg-red-900/30 text-red-500',
-                              isFuture && !isToday && 'bg-zinc-800/50 text-zinc-600',
-                              isRest && !isCompleted && 'bg-zinc-800/30 text-zinc-600',
-                            )}>
+                            <button
+                              onClick={() => {
+                                setSelectedTrainingDate(cellDateStr);
+                                setActiveTab('today');
+                              }}
+                              className={cn(
+                                'w-8 h-8 mx-auto rounded-lg flex items-center justify-center text-[11px] font-medium transition-colors cursor-pointer hover:ring-2 hover:ring-zinc-500',
+                                isToday && !isCompleted && 'bg-blue-600 text-white ring-2 ring-blue-400',
+                                isCompleted && 'bg-emerald-700/40 text-emerald-400',
+                                isPast && !isCompleted && !isRest && 'bg-red-900/30 text-red-500',
+                                isFuture && !isToday && 'bg-zinc-800/50 text-zinc-600',
+                                isRest && !isCompleted && 'bg-zinc-800/30 text-zinc-600',
+                              )}
+                            >
                               {isCompleted ? '✓' : isRest ? '—' : day.dayNumber}
-                            </div>
+                            </button>
                           </td>
                         );
                       })}
@@ -1687,6 +1755,143 @@ export default function TrainingPage() {
               );
             })}
           </div>
+        </Card>
+
+        {/* Month Calendar */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>
+                <Calendar className="h-4 w-4 inline mr-2 text-zinc-400" />
+                {(() => {
+                  const [yr, mo] = calendarMonth.split('-').map(Number);
+                  return new Date(yr, mo - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+                })()}
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const [yr, mo] = calendarMonth.split('-').map(Number);
+                    const d = new Date(yr, mo - 2, 1);
+                    setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                  }}
+                  className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => {
+                    const d = new Date();
+                    setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                  }}
+                  className="text-xs text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-800 transition-colors"
+                >
+                  Today
+                </button>
+                <button
+                  onClick={() => {
+                    const [yr, mo] = calendarMonth.split('-').map(Number);
+                    const d = new Date(yr, mo, 1);
+                    setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                  }}
+                  className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </CardHeader>
+          {(() => {
+            const [yr, mo] = calendarMonth.split('-').map(Number);
+            const firstDay = new Date(yr, mo - 1, 1);
+            const lastDay = new Date(yr, mo, 0);
+            const daysInMonth = lastDay.getDate();
+            // Week starts Monday (0=Mon…6=Sun)
+            const startDow = (firstDay.getDay() + 6) % 7;
+
+            const cells: (string | null)[] = [
+              ...Array(startDow).fill(null),
+              ...Array.from({ length: daysInMonth }, (_, i) => {
+                const d = new Date(yr, mo - 1, i + 1);
+                return d.toISOString().split('T')[0];
+              }),
+            ];
+            // Pad to complete last row
+            while (cells.length % 7 !== 0) cells.push(null);
+
+            const dowLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+            return (
+              <div>
+                {/* Day-of-week headers */}
+                <div className="grid grid-cols-7 mb-1">
+                  {dowLabels.map((d, i) => (
+                    <div key={i} className="text-center text-[10px] text-zinc-600 font-medium py-1">{d}</div>
+                  ))}
+                </div>
+                {/* Calendar rows */}
+                <div className="grid grid-cols-7 gap-y-1">
+                  {cells.map((dateStr, i) => {
+                    if (!dateStr) {
+                      return <div key={i} />;
+                    }
+                    const dayNum = new Date(dateStr + 'T00:00:00').getDate();
+                    const isToday = dateStr === today;
+                    const isSelected = dateStr === selectedTrainingDate;
+                    const isCompleted = completedDates.has(dateStr);
+                    const isPast = dateStr < today;
+                    const isFuture = dateStr > today;
+
+                    // Program position for this date
+                    const diff = Math.floor(
+                      (new Date(dateStr + 'T00:00:00').getTime() - startDate.getTime()) / 86400000
+                    );
+                    const inProgram = diff >= 0 && diff < 56; // 8 weeks
+                    const progWeek = inProgram ? Math.floor(diff / 7) + 1 : null;
+                    const progDay = inProgram ? (diff % 7) + 1 : null;
+                    const isRestDay = inProgram && PROGRAM[(diff % 7)]?.exercises[0]?.type === 'rest';
+
+                    return (
+                      <button
+                        key={dateStr}
+                        onClick={() => {
+                          setSelectedTrainingDate(dateStr);
+                          setActiveTab('today');
+                        }}
+                        className={cn(
+                          'relative flex flex-col items-center rounded-lg py-1.5 px-0.5 transition-colors min-h-[52px] group',
+                          isSelected && 'ring-2 ring-blue-400',
+                          isToday && !isSelected && 'ring-1 ring-blue-600/60',
+                          isCompleted && 'bg-emerald-900/20',
+                          !isCompleted && isPast && inProgram && !isRestDay && 'bg-red-950/20',
+                          !inProgram && 'opacity-30',
+                          'hover:bg-zinc-800/60'
+                        )}
+                      >
+                        <span className={cn(
+                          'text-xs font-semibold leading-none',
+                          isToday ? 'text-blue-400' : isCompleted ? 'text-emerald-400' : isPast && inProgram && !isRestDay ? 'text-red-500' : isFuture ? 'text-zinc-500' : 'text-zinc-300'
+                        )}>
+                          {dayNum}
+                        </span>
+                        {inProgram && (
+                          <span className={cn(
+                            'text-[9px] leading-none mt-0.5',
+                            isRestDay ? 'text-zinc-600' : isCompleted ? 'text-emerald-600' : isPast ? 'text-red-800' : 'text-zinc-600'
+                          )}>
+                            {isRestDay ? 'rest' : `W${progWeek}D${progDay}`}
+                          </span>
+                        )}
+                        {isCompleted && (
+                          <span className="text-[10px] leading-none text-emerald-500 mt-0.5">✓</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </Card>
 
         {/* Legend */}
