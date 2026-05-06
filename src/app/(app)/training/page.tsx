@@ -156,9 +156,10 @@ export default function TrainingPage() {
   const [completingWorkout, setCompletingWorkout] = useState(false);
 
   // Completed workout detail for read-only view (past/completed days)
+  // null = not yet fetched, [] = fetched but no exercise data saved
   const [completedWorkoutDetail, setCompletedWorkoutDetail] = useState<
-    (TrainingExercise & { sets: TrainingSet[] })[]
-  >([]);
+    (TrainingExercise & { sets: TrainingSet[] })[] | null
+  >(null);
 
   // Save indicator
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
@@ -400,7 +401,7 @@ export default function TrainingPage() {
     if (!user || !settings) return;
     setWorkoutStarted(false);
     setExercises([]);
-    setCompletedWorkoutDetail([]);
+    setCompletedWorkoutDetail(null);
     setLastSavedAt(null);
     fetchTodayWorkout();
   }, [user, settings, fetchTodayWorkout, selectedTrainingDate]);
@@ -1531,8 +1532,7 @@ export default function TrainingPage() {
           </div>
           <button
             onClick={() => setSelectedTrainingDate((d) => shiftDate(d, 1))}
-            disabled={selectedTrainingDate >= getToday()}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
           >
             <ChevronRight className="h-5 w-5" />
           </button>
@@ -1669,7 +1669,7 @@ export default function TrainingPage() {
                 <button
                   onClick={async () => {
                     const orCache = await buildOneRMCache(todayProgramDay);
-                    const restored = completedWorkoutDetail.length > 0
+                    const restored = completedWorkoutDetail && completedWorkoutDetail.length > 0
                       ? restoreExercisesFromDB(completedWorkoutDetail, todayProgramDay, programInfo.week, orCache)
                       : buildExercises(todayProgramDay, programInfo.week, orCache);
                     setExercises(restored);
@@ -1684,7 +1684,19 @@ export default function TrainingPage() {
           </Card>
 
           {/* Exercise results */}
-          {completedWorkoutDetail.length > 0 ? (
+          {completedWorkoutDetail === null ? (
+            // Still fetching
+            <div className="flex items-center justify-center h-16">
+              <div className="animate-spin h-5 w-5 border-2 border-emerald-500 border-t-transparent rounded-full" />
+            </div>
+          ) : completedWorkoutDetail.length === 0 ? (
+            // Workout was completed but no set data was saved (logged before persistence fix)
+            <Card className="border-zinc-800">
+              <p className="text-sm text-zinc-500 py-2">
+                This workout was marked complete but no exercise data was recorded.
+              </p>
+            </Card>
+          ) : (
             completedWorkoutDetail.map((dbEx) => {
               const hasSets = dbEx.sets.some(
                 (s) => s.actual_reps || s.actual_weight || s.time_seconds || s.notes
@@ -1767,11 +1779,6 @@ export default function TrainingPage() {
                 </Card>
               );
             })
-          ) : (
-            // Still loading detail
-            <div className="flex items-center justify-center h-16">
-              <div className="animate-spin h-5 w-5 border-2 border-emerald-500 border-t-transparent rounded-full" />
-            </div>
           )}
         </div>
       );
