@@ -155,6 +155,15 @@ export default function TrainingPage() {
   const [exercises, setExercises] = useState<LocalExercise[]>([]);
   const [completingWorkout, setCompletingWorkout] = useState(false);
 
+  // Completed workout detail for read-only view (past/completed days)
+  const [completedWorkoutDetail, setCompletedWorkoutDetail] = useState<
+    (TrainingExercise & { sets: TrainingSet[] })[]
+  >([]);
+
+  // Save indicator
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
   // 1RM cache: milestoneMatch -> best 1RM value
   const [oneRMCache, setOneRMCache] = useState<Record<string, number>>({});
 
@@ -300,6 +309,88 @@ export default function TrainingPage() {
     setHistoryWorkouts(data ?? []);
   }, [user]);
 
+  // ---------------------------------------------------------------------------
+  // Fetch all exercises + sets for a workout (used for restore & read-only view)
+  // ---------------------------------------------------------------------------
+
+  const fetchWorkoutDetail = useCallback(async (
+    workoutId: string
+  ): Promise<(TrainingExercise & { sets: TrainingSet[] })[]> => {
+    const { data: exData } = await supabase
+      .from('training_exercises')
+      .select('*')
+      .eq('workout_id', workoutId)
+      .order('exercise_order');
+    if (!exData?.length) return [];
+    return Promise.all(
+      exData.map(async (ex) => {
+        const { data: sets } = await supabase
+          .from('training_sets')
+          .select('*')
+          .eq('exercise_id', ex.id)
+          .order('set_number');
+        return { ...ex, sets: sets ?? [] };
+      })
+    );
+  }, [supabase]);
+
+  // ---------------------------------------------------------------------------
+  // Restore LocalExercise[] from DB data (re-entering an in-progress workout)
+  // ---------------------------------------------------------------------------
+
+  function restoreExercisesFromDB(
+    dbExercises: (TrainingExercise & { sets: TrainingSet[] })[],
+    programDay: ProgramDay,
+    week: number,
+    orCache: Record<string, number>
+  ): LocalExercise[] {
+    const base = buildExercises(programDay, week, orCache);
+    return base.map((baseEx, idx) => {
+      const dbEx = dbExercises.find((e) => e.exercise_order === idx);
+      if (!dbEx) return baseEx;
+
+      const type = baseEx.programExercise.type;
+      const restoredSets = baseEx.sets.map((baseSet) => {
+        const dbSet = dbEx.sets.find((s) => s.set_number === baseSet.setNumber);
+        if (!dbSet) return baseSet;
+        return {
+          ...baseSet,
+          dbId: dbSet.id,
+          actualWeight: dbSet.actual_weight != null ? String(dbSet.actual_weight) : '',
+          actualReps: dbSet.actual_reps != null ? String(dbSet.actual_reps) : '',
+          timeSeconds: dbSet.time_seconds != null ? formatTime(dbSet.time_seconds) : '',
+          isCompleted: dbSet.is_completed ?? false,
+        };
+      });
+
+      // For AMRAP / circuit / cardio restore from summary set (set_number=1)
+      const summarySet = dbEx.sets.find((s) => s.set_number === 1);
+      let extra: Partial<LocalExercise> = {};
+      if (type === 'amrap' && summarySet) {
+        extra = {
+          amrapRounds: summarySet.actual_reps != null ? String(summarySet.actual_reps) : '',
+          amrapNotes: summarySet.notes ?? '',
+          isCompleted: summarySet.is_completed ?? false,
+        };
+      } else if (type === 'circuit' && summarySet) {
+        extra = {
+          circuitRounds: summarySet.actual_reps ?? 0,
+          circuitTime: summarySet.time_seconds != null ? formatTime(summarySet.time_seconds) : '',
+          circuitNotes: summarySet.notes ?? '',
+          isCompleted: summarySet.is_completed ?? false,
+        };
+      } else if (type === 'cardio' && summarySet) {
+        extra = {
+          cardioElapsedSeconds: summarySet.time_seconds ?? 0,
+          cardioTimeStr: summarySet.time_seconds != null ? formatTime(summarySet.time_seconds) : '',
+          isCompleted: summarySet.is_completed ?? false,
+        };
+      }
+
+      return { ...baseEx, dbId: dbEx.id, sets: restoredSets, ...extra };
+    });
+  }
+
   useEffect(() => {
     if (!user) return;
     fetchSettings();
@@ -309,8 +400,34 @@ export default function TrainingPage() {
     if (!user || !settings) return;
     setWorkoutStarted(false);
     setExercises([]);
+    setCompletedWorkoutDetail([]);
+    setLastSavedAt(null);
     fetchTodayWorkout();
   }, [user, settings, fetchTodayWorkout, selectedTrainingDate]);
+
+  // When todayWorkout row arrives: restore in-progress OR load completed detail
+  useEffect(() => {
+    if (!user || !settings || !todayWorkout) return;
+    const { week, day } = getProgramDay(settings.start_date, todayWorkout.date);
+    const programDay = PROGRAM[(day - 1) % 7];
+
+    if (todayWorkout.started_at && !todayWorkout.completed_at) {
+      // In-progress — restore exercise state so the user picks up where they left off
+      (async () => {
+        const orCache = await buildOneRMCache(programDay);
+        const dbExercises = await fetchWorkoutDetail(todayWorkout.id);
+        if (dbExercises.length > 0) {
+          const restored = restoreExercisesFromDB(dbExercises, programDay, week, orCache);
+          setExercises(restored);
+          setWorkoutStarted(true);
+        }
+      })();
+    } else if (todayWorkout.completed_at) {
+      // Completed — load detail for read-only view
+      fetchWorkoutDetail(todayWorkout.id).then(setCompletedWorkoutDetail);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayWorkout?.id]);
 
   useEffect(() => {
     if (!user || !settings) return;
@@ -465,7 +582,7 @@ export default function TrainingPage() {
     clearTimeout(saveTimers.current[key]);
     saveTimers.current[key] = setTimeout(() => {
       persistExercise(exIdx, updatedExercises);
-    }, 1000);
+    }, 500);
   }
 
   async function ensureWorkoutRow(): Promise<string | null> {
@@ -496,8 +613,9 @@ export default function TrainingPage() {
     const ex = currentExercises[exIdx];
     if (!ex) return;
 
+    setIsSaving(true);
     const workoutId = await ensureWorkoutRow();
-    if (!workoutId) return;
+    if (!workoutId) { setIsSaving(false); return; }
 
     // Upsert exercise row
     let exDbId = ex.dbId;
@@ -514,50 +632,87 @@ export default function TrainingPage() {
         .single();
       exDbId = data?.id ?? null;
       if (exDbId) {
+        const id = exDbId;
         setExercises((prev) => {
           const updated = [...prev];
-          updated[exIdx] = { ...updated[exIdx], dbId: exDbId };
+          updated[exIdx] = { ...updated[exIdx], dbId: id };
           return updated;
         });
       }
     }
 
-    if (!exDbId) return;
+    if (!exDbId) { setIsSaving(false); return; }
 
-    // Upsert sets
-    for (const set of ex.sets) {
-      const payload = {
-        exercise_id: exDbId,
-        set_number: set.setNumber,
-        target_reps: typeof set.targetReps === 'number' ? set.targetReps : null,
-        actual_reps: set.actualReps ? parseInt(set.actualReps) : null,
-        target_weight: set.targetWeight,
-        actual_weight: set.actualWeight ? parseFloat(set.actualWeight) : null,
-        time_seconds: set.timeSeconds ? parseTime(set.timeSeconds) : null,
-        is_completed: set.isCompleted,
-        notes: null,
-      };
-      if (set.dbId) {
-        await supabase.from('training_sets').update(payload).eq('id', set.dbId);
-      } else {
-        const { data } = await supabase
-          .from('training_sets')
-          .upsert(payload, { onConflict: 'exercise_id,set_number' })
-          .select()
-          .single();
-        if (data?.id) {
-          setExercises((prev) => {
-            const updated = [...prev];
-            const exCopy = { ...updated[exIdx] };
-            exCopy.sets = exCopy.sets.map((s) =>
-              s.setNumber === set.setNumber ? { ...s, dbId: data.id } : s
-            );
-            updated[exIdx] = exCopy;
-            return updated;
-          });
+    const type = ex.programExercise.type;
+
+    if (type === 'strength' || type === 'intervals') {
+      // Save individual sets
+      for (const set of ex.sets) {
+        const payload = {
+          exercise_id: exDbId,
+          set_number: set.setNumber,
+          target_reps: typeof set.targetReps === 'number' ? set.targetReps : null,
+          actual_reps: set.actualReps ? parseInt(set.actualReps) : null,
+          target_weight: set.targetWeight,
+          actual_weight: set.actualWeight ? parseFloat(set.actualWeight) : null,
+          time_seconds: set.timeSeconds ? parseTime(set.timeSeconds) : null,
+          is_completed: set.isCompleted,
+          notes: null,
+        };
+        if (set.dbId) {
+          await supabase.from('training_sets').update(payload).eq('id', set.dbId);
+        } else {
+          const { data } = await supabase
+            .from('training_sets')
+            .upsert(payload, { onConflict: 'exercise_id,set_number' })
+            .select()
+            .single();
+          if (data?.id) {
+            const setDbId = data.id;
+            const sn = set.setNumber;
+            setExercises((prev) => {
+              const updated = [...prev];
+              const exCopy = { ...updated[exIdx] };
+              exCopy.sets = exCopy.sets.map((s) =>
+                s.setNumber === sn ? { ...s, dbId: setDbId } : s
+              );
+              updated[exIdx] = exCopy;
+              return updated;
+            });
+          }
         }
       }
+    } else if (type === 'amrap') {
+      // Save as a single summary set
+      await supabase.from('training_sets').upsert({
+        exercise_id: exDbId,
+        set_number: 1,
+        actual_reps: ex.amrapRounds ? parseInt(ex.amrapRounds) : null,
+        is_completed: ex.isCompleted,
+        notes: ex.amrapNotes || null,
+      }, { onConflict: 'exercise_id,set_number' });
+    } else if (type === 'circuit') {
+      await supabase.from('training_sets').upsert({
+        exercise_id: exDbId,
+        set_number: 1,
+        actual_reps: ex.circuitRounds || null,
+        time_seconds: ex.circuitTime ? parseTime(ex.circuitTime) : null,
+        is_completed: ex.isCompleted,
+        notes: ex.circuitNotes || null,
+      }, { onConflict: 'exercise_id,set_number' });
+    } else if (type === 'cardio' || type === 'optional') {
+      await supabase.from('training_sets').upsert({
+        exercise_id: exDbId,
+        set_number: 1,
+        time_seconds: ex.cardioElapsedSeconds > 0
+          ? ex.cardioElapsedSeconds
+          : ex.cardioTimeStr ? parseTime(ex.cardioTimeStr) : null,
+        is_completed: ex.isCompleted,
+      }, { onConflict: 'exercise_id,set_number' });
     }
+
+    setIsSaving(false);
+    setLastSavedAt(new Date());
   }
 
   // ---------------------------------------------------------------------------
@@ -594,7 +749,9 @@ export default function TrainingPage() {
       sets[setIdx] = { ...sets[setIdx], isCompleted: !sets[setIdx].isCompleted };
       exCopy.sets = sets;
       updated[exIdx] = exCopy;
-      scheduleExerciseSave(exIdx, updated);
+      // Cancel debounced save and persist immediately on checkmark tap
+      clearTimeout(saveTimers.current[`ex-${exIdx}`]);
+      persistExercise(exIdx, updated);
       return updated;
     });
   }
@@ -603,7 +760,8 @@ export default function TrainingPage() {
     setExercises((prev) => {
       const updated = [...prev];
       updated[exIdx] = { ...updated[exIdx], isCompleted: !updated[exIdx].isCompleted };
-      scheduleExerciseSave(exIdx, updated);
+      clearTimeout(saveTimers.current[`ex-${exIdx}`]);
+      persistExercise(exIdx, updated);
       return updated;
     });
   }
@@ -722,23 +880,7 @@ export default function TrainingPage() {
   // ---------------------------------------------------------------------------
 
   async function loadHistoryDetail(workout: TrainingWorkout) {
-    const { data: exData } = await supabase
-      .from('training_exercises')
-      .select('*')
-      .eq('workout_id', workout.id)
-      .order('exercise_order');
-    if (!exData) return;
-
-    const result = await Promise.all(
-      exData.map(async (ex) => {
-        const { data: sets } = await supabase
-          .from('training_sets')
-          .select('*')
-          .eq('exercise_id', ex.id)
-          .order('set_number');
-        return { ...ex, sets: sets ?? [] };
-      })
-    );
+    const result = await fetchWorkoutDetail(workout.id);
     setHistoryDetail({ workout, exercises: result });
   }
 
@@ -1447,6 +1589,37 @@ export default function TrainingPage() {
       </div>
     );
 
+    // Future workout — locked
+    if (isViewingFuture) {
+      return (
+        <div className="space-y-4">
+          {dateNavBlock}
+          <Card className="border-zinc-800">
+            <div className="flex items-center gap-4 py-4">
+              <span className="text-4xl">🔒</span>
+              <div>
+                <div className="text-lg font-bold text-zinc-400">{todayProgramDay.name}</div>
+                <p className={cn('text-sm font-medium mt-0.5', todayProgramDay.color)}>
+                  {todayProgramDay.focus}
+                </p>
+                <p className="text-zinc-500 text-sm mt-1">
+                  Available on {formatDate(selectedTrainingDate)}
+                </p>
+              </div>
+            </div>
+            <div className="space-y-1 border-t border-zinc-800 pt-3 mt-2">
+              {todayProgramDay.exercises.filter(e => e.type !== 'rest').map((ex, i) => (
+                <div key={i} className="flex items-center gap-2 py-1 text-sm text-zinc-500">
+                  <span className="w-4 text-center text-xs">{i + 1}</span>
+                  <span>{ex.name}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
     // Rest day — no workout tracker needed
     if (todayProgramDay.exercises[0]?.type === 'rest') {
       return (
@@ -1465,7 +1638,7 @@ export default function TrainingPage() {
       );
     }
 
-    // Already completed — show summary
+    // Already completed — show detailed read-only results
     if (alreadyCompleted && !workoutStarted) {
       const startedAt = todayWorkout?.started_at ? new Date(todayWorkout.started_at) : null;
       const completedAt = todayWorkout?.completed_at ? new Date(todayWorkout.completed_at) : null;
@@ -1476,46 +1649,152 @@ export default function TrainingPage() {
       return (
         <div className="space-y-4">
           {dateNavBlock}
+
+          {/* Completed badge */}
           <Card className="border-emerald-800/50 bg-emerald-950/20">
-            <div className="flex items-center gap-3 mb-3">
-              <CheckCircle2 className="h-7 w-7 text-emerald-400" />
-              <div>
-                <div className="text-lg font-bold text-emerald-400">Workout Complete!</div>
-                {durationMin && (
-                  <div className="text-sm text-zinc-400">{durationMin} min</div>
-                )}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-6 w-6 text-emerald-400 shrink-0" />
+                <div>
+                  <div className="text-base font-bold text-emerald-400">
+                    Completed{isViewingPast ? ` · ${formatDate(selectedTrainingDate)}` : ''}
+                  </div>
+                  <div className="text-sm text-zinc-400 mt-0.5">
+                    {todayProgramDay.focus}
+                    {durationMin ? ` · ${durationMin} min` : ''}
+                  </div>
+                </div>
               </div>
+              {!isViewingPast && (
+                <button
+                  onClick={async () => {
+                    const orCache = await buildOneRMCache(todayProgramDay);
+                    const restored = completedWorkoutDetail.length > 0
+                      ? restoreExercisesFromDB(completedWorkoutDetail, todayProgramDay, programInfo.week, orCache)
+                      : buildExercises(todayProgramDay, programInfo.week, orCache);
+                    setExercises(restored);
+                    setWorkoutStarted(true);
+                  }}
+                  className="text-xs text-blue-400 hover:text-blue-300 border border-blue-800/40 rounded-lg px-3 py-2 min-h-[40px] whitespace-nowrap"
+                >
+                  Edit
+                </button>
+              )}
             </div>
-            <p className="text-sm text-zinc-400">
-              {todayProgramDay.focus} — {todayProgramDay.exercises.length} exercises
-            </p>
-            <button
-              onClick={async () => {
-                // Re-enter editing mode
-                const orCache = await buildOneRMCache(todayProgramDay);
-                const exs = buildExercises(todayProgramDay, programInfo.week, orCache);
-                setExercises(exs);
-                setWorkoutStarted(true);
-              }}
-              className="mt-4 text-sm text-blue-400 hover:text-blue-300 underline underline-offset-2"
-            >
-              Edit workout
-            </button>
           </Card>
+
+          {/* Exercise results */}
+          {completedWorkoutDetail.length > 0 ? (
+            completedWorkoutDetail.map((dbEx) => {
+              const hasSets = dbEx.sets.some(
+                (s) => s.actual_reps || s.actual_weight || s.time_seconds || s.notes
+              );
+              return (
+                <Card key={dbEx.id} className={cn(
+                  'border-zinc-800',
+                  dbEx.sets.some(s => s.is_completed) && 'border-emerald-900/40'
+                )}>
+                  <CardHeader className="mb-2">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm">{dbEx.exercise_name}</CardTitle>
+                      {dbEx.sets.some(s => s.is_completed) && (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                      )}
+                    </div>
+                  </CardHeader>
+                  {hasSets ? (
+                    <div>
+                      {dbEx.exercise_type === 'strength' && (
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-[10px] text-zinc-600 w-6 text-center">#</span>
+                          <span className="text-[10px] text-zinc-600 w-16 text-center">Weight</span>
+                          <span className="text-[10px] text-zinc-600 w-14 text-center">Reps</span>
+                        </div>
+                      )}
+                      {dbEx.sets.map((s) => (
+                        <div key={s.id} className={cn(
+                          'flex items-center gap-2 py-2 border-b border-zinc-800/50 last:border-0 text-sm',
+                          !s.is_completed && 'opacity-40'
+                        )}>
+                          {dbEx.exercise_type === 'strength' && (
+                            <>
+                              <span className="text-zinc-500 w-6 text-center text-xs">{s.set_number}</span>
+                              <span className="w-16 text-center font-medium text-white">
+                                {s.actual_weight != null ? `${s.actual_weight} lbs` : '—'}
+                              </span>
+                              <span className="w-14 text-center text-zinc-300">
+                                {s.actual_reps != null ? `${s.actual_reps}` : '—'}
+                              </span>
+                              {s.is_completed && <CheckCircle2 className="h-4 w-4 text-emerald-500 ml-auto" />}
+                            </>
+                          )}
+                          {dbEx.exercise_type === 'intervals' && (
+                            <>
+                              <span className="text-zinc-500 text-xs">Round {s.set_number}</span>
+                              <span className="text-white font-medium ml-2">
+                                {s.time_seconds != null ? formatTime(s.time_seconds) : '—'}
+                              </span>
+                              {s.is_completed && <CheckCircle2 className="h-4 w-4 text-emerald-500 ml-auto" />}
+                            </>
+                          )}
+                          {(dbEx.exercise_type === 'amrap' || dbEx.exercise_type === 'circuit') && (
+                            <>
+                              {s.actual_reps != null && (
+                                <span className="text-white font-medium">
+                                  {dbEx.exercise_type === 'amrap' ? `${s.actual_reps} rounds` : `${s.actual_reps}× rounds`}
+                                </span>
+                              )}
+                              {s.time_seconds != null && (
+                                <span className="text-zinc-300 ml-2">{formatTime(s.time_seconds)}</span>
+                              )}
+                              {s.notes && <span className="text-zinc-400 text-xs ml-2 truncate">{s.notes}</span>}
+                            </>
+                          )}
+                          {(dbEx.exercise_type === 'cardio' || dbEx.exercise_type === 'optional') && (
+                            <>
+                              {s.time_seconds != null && (
+                                <span className="text-white font-medium">{formatTime(s.time_seconds)}</span>
+                              )}
+                              {s.is_completed && <CheckCircle2 className="h-4 w-4 text-emerald-500 ml-auto" />}
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-zinc-600">No data recorded</p>
+                  )}
+                </Card>
+              );
+            })
+          ) : (
+            // Still loading detail
+            <div className="flex items-center justify-center h-16">
+              <div className="animate-spin h-5 w-5 border-2 border-emerald-500 border-t-transparent rounded-full" />
+            </div>
+          )}
         </div>
       );
     }
 
-    // Not started yet — preview + start button
+    // Not started yet — preview + start button (only available for today or past dates)
     if (!workoutStarted) {
+      const isPastUnlogged = isViewingPast && !alreadyCompleted;
       return (
         <div className="space-y-4">
           {dateNavBlock}
 
+          {isPastUnlogged && (
+            <div className="flex items-center gap-2 bg-amber-950/20 border border-amber-800/30 rounded-xl px-4 py-3 text-sm text-amber-400">
+              <span>⚠</span>
+              <span>This workout was not logged. You can still log it retroactively.</span>
+            </div>
+          )}
+
           {/* Exercise preview */}
           <Card>
             <CardHeader>
-              <CardTitle>Today&apos;s Workout</CardTitle>
+              <CardTitle>{selectedTrainingDate === getToday() ? "Today's Workout" : "Workout Preview"}</CardTitle>
             </CardHeader>
             <div className="space-y-2">
               {todayProgramDay.exercises.map((ex, i) => (
@@ -1555,7 +1834,7 @@ export default function TrainingPage() {
               className="mt-5 w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold text-lg min-h-[60px] transition-colors"
             >
               <Play className="h-6 w-6" />
-              Start Workout
+              {isPastUnlogged ? 'Log Retroactively' : 'Start Workout'}
             </button>
           </Card>
         </div>
@@ -1566,6 +1845,19 @@ export default function TrainingPage() {
     return (
       <div className="space-y-4">
         {dateNavBlock}
+
+        {/* Save indicator */}
+        <div className="flex items-center justify-end h-5">
+          {isSaving && (
+            <span className="flex items-center gap-1.5 text-xs text-zinc-500">
+              <div className="w-3 h-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
+              Saving…
+            </span>
+          )}
+          {!isSaving && lastSavedAt && (
+            <span className="text-xs text-emerald-600">✓ Saved</span>
+          )}
+        </div>
 
         {/* Exercise blocks */}
         {exercises.map((ex, idx) => renderExerciseBlock(ex, idx))}
