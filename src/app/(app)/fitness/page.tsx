@@ -461,6 +461,7 @@ export default function FitnessPage() {
               </label>
               <input
                 type="number"
+                inputMode="decimal"
                 step="0.1"
                 value={dailyForm.weight_lbs ?? ''}
                 onChange={(e) =>
@@ -533,7 +534,7 @@ export default function FitnessPage() {
                       <div className="flex items-center gap-1.5 ml-auto shrink-0">
                         <input
                           type="number"
-                          inputMode="numeric"
+                          inputMode="decimal"
                           value={addVal}
                           onChange={(e) =>
                             setAddAmounts((prev) => ({ ...prev, [f.name]: e.target.value }))
@@ -604,7 +605,7 @@ export default function FitnessPage() {
                   </label>
                   <input
                     type="number"
-                    inputMode="numeric"
+                    inputMode="decimal"
                     value={val ?? ''}
                     onChange={(e) =>
                       setDailyForm((prev) => ({
