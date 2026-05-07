@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Offline — Pearson Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #09090b;
+      color: #fafafa;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      padding-bottom: calc(2rem + env(safe-area-inset-bottom));
+      text-align: center;
+    }
+    .icon {
+      font-size: 4rem;
+      margin-bottom: 1.5rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      color: #fafafa;
+    }
+    p {
+      color: #a1a1aa;
+      font-size: 0.95rem;
+      line-height: 1.6;
+      max-width: 320px;
+      margin-bottom: 2rem;
+    }
+    button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 0.75rem;
+      padding: 0.875rem 2rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      min-height: 52px;
+    }
+    button:active { background: #2563eb; }
+  </style>
+</head>
+<body>
+  <div class="icon">📡</div>
+  <h1>You're offline</h1>
+  <p>Connect to the internet to sync your data. Your last loaded data is still available in the app.</p>
+  <button onclick="window.location.reload()">Try again</button>
+</body>
+</html>

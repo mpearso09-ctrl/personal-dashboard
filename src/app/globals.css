@@ -50,3 +50,11 @@ input[type="number"]::-webkit-inner-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
 }
+
+/* Safe area utilities for iOS notch / home bar */
+.pb-safe-bottom {
+  padding-bottom: max(5rem, calc(5rem + env(safe-area-inset-bottom)));
+}
+.safe-pb {
+  padding-bottom: env(safe-area-inset-bottom);
+}

@@ -181,6 +181,9 @@ export default function TrainingPage() {
   // Debounce refs
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  // Swipe gesture refs (for date navigation on Today tab)
+  const swipeTouchStart = useRef<{ x: number; y: number } | null>(null);
+
   // ---------------------------------------------------------------------------
   // Wake lock
   // ---------------------------------------------------------------------------
@@ -743,6 +746,8 @@ export default function TrainingPage() {
   }
 
   function toggleSetComplete(exIdx: number, setIdx: number) {
+    // Haptic feedback on mobile
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
     setExercises((prev) => {
       const updated = [...prev];
       const exCopy = { ...updated[exIdx] };
@@ -758,6 +763,7 @@ export default function TrainingPage() {
   }
 
   function toggleExerciseComplete(exIdx: number) {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
     setExercises((prev) => {
       const updated = [...prev];
       updated[exIdx] = { ...updated[exIdx], isCompleted: !updated[exIdx].isCompleted };
@@ -2393,10 +2399,34 @@ export default function TrainingPage() {
         })}
       </div>
 
-      {/* Tab content */}
-      {activeTab === 'today' && renderTodayTab()}
-      {activeTab === 'program' && renderProgramTab()}
-      {activeTab === 'history' && renderHistoryTab()}
+      {/* Tab content — swipe left/right on Today tab to navigate dates */}
+      <div
+        onTouchStart={(e) => {
+          if (activeTab !== 'today') return;
+          const t = e.touches[0];
+          swipeTouchStart.current = { x: t.clientX, y: t.clientY };
+        }}
+        onTouchEnd={(e) => {
+          if (activeTab !== 'today' || !swipeTouchStart.current) return;
+          const t = e.changedTouches[0];
+          const dx = t.clientX - swipeTouchStart.current.x;
+          const dy = t.clientY - swipeTouchStart.current.y;
+          swipeTouchStart.current = null;
+          // Only treat as horizontal swipe if dx dominates (not a scroll)
+          if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+          if (dx < 0) {
+            // Swipe left → next day
+            setSelectedTrainingDate((d) => shiftDate(d, 1));
+          } else {
+            // Swipe right → previous day
+            setSelectedTrainingDate((d) => shiftDate(d, -1));
+          }
+        }}
+      >
+        {activeTab === 'today' && renderTodayTab()}
+        {activeTab === 'program' && renderProgramTab()}
+        {activeTab === 'history' && renderHistoryTab()}
+      </div>
     </div>
   );
 }
