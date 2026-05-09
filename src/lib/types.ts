@@ -78,7 +78,9 @@ export interface BudgetCategory {
   household_id: string;
   user_id: string;
   name: string;
+  /** The entered amount in the given frequency. Use monthlyEquiv() to get the monthly value. */
   monthly_amount: number;
+  frequency: 'monthly' | 'weekly' | 'biweekly' | 'annual';
   sort_order: number;
   created_at: string;
 }
