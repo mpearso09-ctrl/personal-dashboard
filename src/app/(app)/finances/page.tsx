@@ -466,6 +466,7 @@ function IncomeTab({
   const [weekEntries, setWeekEntries] = useState<IncomeDailyEntry[]>([]);
   const [todayEntries, setTodayEntries] = useState<IncomeDailyEntry[]>([]);
   const [chartEntries, setChartEntries] = useState<IncomeDailyEntry[]>([]);
+  const [yearEntries, setYearEntries] = useState<IncomeDailyEntry[]>([]);
   const [selectedWeek, setSelectedWeek] = useState<string>(() => getMondayOfWeek(getToday()));
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null);
   const [addAmounts, setAddAmounts] = useState<Record<string, string>>({});
@@ -514,11 +515,23 @@ function IncomeTab({
     if (data) setChartEntries(data);
   }, [householdId]);
 
+  const loadYearEntries = useCallback(async () => {
+    const yearStart = `${new Date().getFullYear()}-01-01`;
+    const { data } = await supabase
+      .from('income_daily')
+      .select('*')
+      .eq('household_id', householdId)
+      .gte('date', yearStart)
+      .lte('date', getToday());
+    if (data) setYearEntries(data);
+  }, [householdId]);
+
   const loadAll = useCallback(async () => {
     await loadCategories();
     await loadWeekEntries(selectedWeek);
     await loadChartEntries();
-  }, [loadCategories, loadWeekEntries, selectedWeek, loadChartEntries]);
+    await loadYearEntries();
+  }, [loadCategories, loadWeekEntries, selectedWeek, loadChartEntries, loadYearEntries]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => { loadWeekEntries(selectedWeek); }, [selectedWeek, loadWeekEntries]);
@@ -561,12 +574,14 @@ function IncomeTab({
     setAddSaving(false);
     await loadWeekEntries(selectedWeek);
     await loadChartEntries();
+    await loadYearEntries();
   };
 
   const handleDeleteEntry = async (entryId: string) => {
     await supabase.from('income_daily').delete().eq('id', entryId);
     await loadWeekEntries(selectedWeek);
     await loadChartEntries();
+    await loadYearEntries();
   };
 
   const renameCategory = async (catId: string, newName: string) => {
@@ -600,6 +615,12 @@ function IncomeTab({
     await supabase.from('income_categories').insert(rows);
     await loadAll();
   };
+
+  // YTD derived
+  const currentYear = new Date().getFullYear();
+  const yearSumByCat = (catId: string) =>
+    yearEntries.filter((e) => e.category_id === catId).reduce((s, e) => s + e.amount, 0);
+  const grandYearTotal = categories.reduce((s, c) => s + yearSumByCat(c.id), 0);
 
   // Build chart data: monthly income per category
   const months = getLast3Months();
@@ -853,6 +874,43 @@ function IncomeTab({
                 </div>
               );
             })}
+          </div>
+        </Card>
+      )}
+
+      {/* Year-to-date totals */}
+      {categories.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{currentYear} Year to Date</CardTitle>
+          </CardHeader>
+          <div className="space-y-2">
+            {categories.map((cat) => {
+              const ytd = yearSumByCat(cat.id);
+              const pct = grandYearTotal > 0 ? (ytd / grandYearTotal) * 100 : 0;
+              return (
+                <div key={cat.id} className="flex items-center gap-3">
+                  <span className="text-sm text-zinc-300 w-32 shrink-0 truncate">{cat.name}</span>
+                  <div className="flex-1 bg-zinc-800 rounded-full h-2">
+                    <div
+                      className="h-2 rounded-full bg-emerald-500 transition-all"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <span className="text-sm font-semibold text-emerald-400 w-28 text-right shrink-0">
+                    {formatCurrency(Math.round(ytd))}
+                  </span>
+                </div>
+              );
+            })}
+            {/* Grand total divider row */}
+            <div className="flex items-center gap-3 pt-2 mt-1 border-t border-zinc-700">
+              <span className="text-sm font-semibold text-white w-32 shrink-0">Total</span>
+              <div className="flex-1" />
+              <span className="text-base font-bold text-emerald-400 w-28 text-right shrink-0">
+                {formatCurrency(Math.round(grandYearTotal))}
+              </span>
+            </div>
           </div>
         </Card>
       )}
