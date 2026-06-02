@@ -70,8 +70,9 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import FinanceOverview from '@/components/finance-overview';
+import { ReportsTab } from './reports-tab';
 
-const TABS = ['Overview', 'Income', 'Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Investments'] as const;
+const TABS = ['Overview', 'Income', 'Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Investments', 'Reports'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_ICONS: Record<Tab, React.ReactNode> = {
@@ -82,6 +83,7 @@ const TAB_ICONS: Record<Tab, React.ReactNode> = {
   Reimbursements: <Receipt className="w-4 h-4" />,
   'Net Worth': <Landmark className="w-4 h-4" />,
   Investments: <PieIcon className="w-4 h-4" />,
+  Reports: <Receipt className="w-4 h-4" />,
 };
 
 const TIER_COLORS: Record<Investment['tier'], string> = {
@@ -399,6 +401,9 @@ export default function FinancesPage() {
       )}
       {activeTab === 'Investments' && (
         <InvestmentsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
+      )}
+      {activeTab === 'Reports' && (
+        <ReportsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
       )}
     </div>
   );

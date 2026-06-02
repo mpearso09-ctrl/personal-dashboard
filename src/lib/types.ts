@@ -588,6 +588,64 @@ export const DEFAULT_INCOME_CATEGORIES = [
   'Other',
 ];
 
+// ---- Reports ----
+
+export interface ReportMonthlyTrend {
+  month: string;  // "YYYY-MM"
+  label: string;  // "May '26"
+  income: number;
+  spending: number;
+  netIncome: number;
+  netWorth: number;
+  totalDebt: number;
+  totalCash: number;
+  spendingByCategory: { name: string; amount: number }[];
+}
+
+export interface ReportData {
+  month: string; // "YYYY-MM"
+  generatedAt: string;
+  isPartial: boolean;
+  // Section 1 — Bottom Line
+  incomeTotal: number;
+  spendingTotal: number;
+  netIncome: number;
+  netWorthCurrent: number;
+  netWorthPrevMonth: number;
+  netWorthChange: number;
+  // Section 2 — Breakdown
+  incomeBreakdown: { name: string; amount: number }[];
+  spendingBreakdown: { name: string; budgeted: number; actual: number; variance: number }[];
+  // Section 4 — Assets & Liabilities
+  assets: { name: string; prev: number; current: number; change: number }[];
+  liabilities: { name: string; prev: number; current: number; change: number }[];
+  // Section 5 — Cash
+  cashAccounts: { name: string; balance: number; prevBalance: number }[];
+  // Section 6 — Trends
+  monthlyTrends: ReportMonthlyTrend[];
+}
+
+export interface MonthlyReport {
+  id: string;
+  household_id: string;
+  month: string; // YYYY-MM-01
+  report_data: ReportData;
+  status: 'draft' | 'ready' | 'sent';
+  is_partial: boolean;
+  generated_at: string;
+  sent_at: string | null;
+  created_at: string;
+}
+
+export interface ReportRecipient {
+  id: string;
+  household_id: string;
+  name: string;
+  email: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 export const DEFAULT_NET_WORTH_LIABILITIES = [
   'RBC Credit Card',
   'Triangle Credit Card',

@@ -51,6 +51,18 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
+/* Print styles for financial reports */
+@media print {
+  body { background: #fff !important; color: #09090b !important; }
+  .print\:hidden { display: none !important; }
+  nav, aside, header { display: none !important; }
+  main { margin: 0 !important; padding: 0 !important; }
+  .bg-zinc-900, .bg-zinc-800, .bg-card { background: #f4f4f5 !important; }
+  .border-zinc-800, .border-zinc-700 { border-color: #d4d4d8 !important; }
+  .text-white { color: #09090b !important; }
+  .text-zinc-200, .text-zinc-300, .text-zinc-400 { color: #52525b !important; }
+}
+
 /* Safe area utilities for iOS notch / home bar */
 .pb-safe-bottom {
   padding-bottom: max(5rem, calc(5rem + env(safe-area-inset-bottom)));
