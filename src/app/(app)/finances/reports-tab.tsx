@@ -662,13 +662,17 @@ function RecipientsModal({ householdId, onClose }: { householdId: string; onClos
   const supabase = createClient();
   const [recipients, setRecipients] = useState<ReportRecipient[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from('report_recipients').select('*').eq('household_id', householdId).order('created_at');
-    if (data) setRecipients(data);
+    setLoadError(null);
+    const { data, error } = await supabase.from('report_recipients').select('*').eq('household_id', householdId).order('created_at');
+    if (error) { setLoadError(error.message); }
+    else if (data) setRecipients(data);
     setLoading(false);
   }, [householdId]);
 
@@ -677,10 +681,15 @@ function RecipientsModal({ householdId, onClose }: { householdId: string; onClos
   const add = async () => {
     if (!newName.trim() || !newEmail.trim()) return;
     setSaving(true);
-    await supabase.from('report_recipients').insert({ household_id: householdId, name: newName.trim(), email: newEmail.trim() });
-    setNewName(''); setNewEmail('');
+    setSaveError(null);
+    const { error } = await supabase.from('report_recipients').insert({ household_id: householdId, name: newName.trim(), email: newEmail.trim() });
+    if (error) {
+      setSaveError(error.message);
+    } else {
+      setNewName(''); setNewEmail('');
+      await load();
+    }
     setSaving(false);
-    await load();
   };
 
   const toggle = async (id: string, active: boolean) => {
@@ -703,6 +712,11 @@ function RecipientsModal({ householdId, onClose }: { householdId: string; onClos
           </button>
         </div>
         <div className="p-5 space-y-3 max-h-[60vh] overflow-y-auto">
+          {loadError && (
+            <div className="flex items-center gap-2 text-sm text-red-400 bg-red-600/10 border border-red-600/20 rounded-lg px-3 py-2">
+              <AlertCircle className="w-4 h-4 shrink-0" /> {loadError}
+            </div>
+          )}
           {loading ? <Loader2 className="w-5 h-5 animate-spin text-zinc-400 mx-auto" /> : (
             <>
               {recipients.map((r) => (
@@ -727,9 +741,14 @@ function RecipientsModal({ householdId, onClose }: { householdId: string; onClos
           )}
         </div>
         <div className="p-5 border-t border-zinc-800 space-y-3">
+          {saveError && (
+            <div className="flex items-center gap-2 text-sm text-red-400 bg-red-600/10 border border-red-600/20 rounded-lg px-3 py-2">
+              <AlertCircle className="w-4 h-4 shrink-0" /> {saveError}
+            </div>
+          )}
           <div className="flex gap-2">
-            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500 min-h-[40px]" />
-            <input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="Email" type="email" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500 min-h-[40px]" />
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} placeholder="Name" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500 min-h-[40px]" />
+            <input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} placeholder="Email" type="email" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500 min-h-[40px]" />
             <button onClick={add} disabled={saving || !newName.trim() || !newEmail.trim()} className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-2 rounded text-sm font-medium transition-colors min-h-[40px]">
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
             </button>
@@ -759,6 +778,7 @@ export function ReportsTab({
   const [loading, setLoading] = useState(true);
   const [viewingReport, setViewingReport] = useState<MonthlyReport | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<string | null>(null);
   const [showRecipients, setShowRecipients] = useState(false);
@@ -795,11 +815,11 @@ export function ReportsTab({
   }, [loading]);
 
   const handleGenerate = async (month: string, isPartial: boolean, silent = false) => {
-    if (!silent) setGenerating(true);
+    if (!silent) { setGenerating(true); setGenerateError(null); }
     try {
       const data = await generateReportData(supabase, householdId, month, isPartial);
       const monthStart = month + '-01';
-      await supabase.from('monthly_reports').upsert(
+      const { error: upsertError } = await supabase.from('monthly_reports').upsert(
         {
           household_id: householdId,
           month: monthStart,
@@ -810,12 +830,14 @@ export function ReportsTab({
         },
         { onConflict: 'household_id,month,is_partial' }
       );
+      if (upsertError) throw new Error(upsertError.message);
       await loadReports();
       if (!silent) {
-        // Open the just-generated report
         const { data: fresh } = await supabase.from('monthly_reports').select('*').eq('household_id', householdId).eq('month', monthStart).eq('is_partial', isPartial).single();
         if (fresh) setViewingReport(fresh);
       }
+    } catch (err) {
+      if (!silent) setGenerateError(err instanceof Error ? err.message : 'Generation failed');
     } finally {
       if (!silent) setGenerating(false);
     }
@@ -920,6 +942,15 @@ export function ReportsTab({
           )}
         </div>
       </div>
+
+      {/* Generation error */}
+      {generateError && (
+        <div className="flex items-center gap-2 text-sm text-red-400 bg-red-600/10 border border-red-600/20 rounded-lg px-4 py-3">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>Report generation failed: {generateError}</span>
+          <button onClick={() => setGenerateError(null)} className="ml-auto text-red-400 hover:text-red-300"><X className="w-4 h-4" /></button>
+        </div>
+      )}
 
       {/* Report archive */}
       {loading ? (
