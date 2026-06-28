@@ -16,12 +16,14 @@ import {
   Menu,
   X,
   Zap,
+  Brain,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/brain', label: 'Brain', icon: Brain },
   { href: '/fitness', label: 'Fitness', icon: Dumbbell },
   { href: '/training', label: 'Training', icon: Zap },
   { href: '/finances', label: 'Finances', icon: DollarSign },
@@ -119,7 +121,7 @@ export function Sidebar() {
 
       {/* Mobile bottom tabs */}
       <div className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-zinc-900/95 backdrop-blur border-t border-zinc-800">
-        <div className="flex justify-around py-2">
+        <div className="flex justify-around py-2" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
           {navItems.map((item) => {
             const active = pathname.startsWith(item.href);
             return (
