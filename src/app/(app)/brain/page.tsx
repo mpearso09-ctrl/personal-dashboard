@@ -17,7 +17,7 @@ interface Briefing {
   updated_at: string;
 }
 
-type ItemKind = 'project' | 'decision' | 'commitment' | 'person' | 'insight' | 'todo';
+type ItemKind = 'project' | 'decision' | 'commitment' | 'person' | 'insight' | 'todo' | 'context';
 
 interface BrainItem {
   id: string;
@@ -62,6 +62,14 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 
 function ownerColor(owner: string | null): string {
   return (owner ?? '').toUpperCase() === 'CONFIRM' ? 'text-amber-400' : 'text-zinc-300';
+}
+
+function statusColor(status: string | null): string {
+  const s = (status ?? '').toLowerCase();
+  if (s.includes('scaffold')) return 'text-amber-400';
+  if (s.includes('unowned') || s.includes('risk') || s.includes('blocked')) return 'text-red-400';
+  if (s.includes('active') || s.includes('ready') || s.includes('review')) return 'text-emerald-400';
+  return 'text-zinc-400';
 }
 
 const inputCls =
@@ -128,7 +136,18 @@ function OutTo({ item, onUpdate }: { item: BrainItem; onUpdate: (id: string, f: 
   );
 }
 
-function ActionCard({ item, onUpdate }: { item: BrainItem; onUpdate: (id: string, f: EditableFields) => void }) {
+// An actionable item: check it off, set a due date, flag it out to someone, add a comment.
+function ActionCard({
+  item,
+  onUpdate,
+  hideProject,
+  commentPlaceholder,
+}: {
+  item: BrainItem;
+  onUpdate: (id: string, f: EditableFields) => void;
+  hideProject?: boolean;
+  commentPlaceholder?: string;
+}) {
   return (
     <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
       <div className="flex items-start gap-3">
@@ -142,7 +161,7 @@ function ActionCard({ item, onUpdate }: { item: BrainItem; onUpdate: (id: string
           <p className={cn('text-sm', item.done ? 'line-through text-zinc-500' : 'text-zinc-100')}>{item.title}</p>
           {item.detail ? <p className="text-xs text-zinc-400 mt-0.5">{item.detail}</p> : null}
           <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
-            {item.project ? <span className="text-zinc-500">{item.project}</span> : null}
+            {!hideProject && item.project ? <span className="text-zinc-500">{item.project}</span> : null}
             {item.owner ? (
               <span>
                 <span className="text-zinc-500">Owner: </span>
@@ -154,9 +173,58 @@ function ActionCard({ item, onUpdate }: { item: BrainItem; onUpdate: (id: string
             </label>
             <OutTo item={item} onUpdate={onUpdate} />
           </div>
-          <TextField key={item.comment ?? ''} value={item.comment} placeholder="Add a comment..." onSave={(v) => onUpdate(item.id, { comment: v })} />
+          <TextField
+            key={item.comment ?? ''}
+            value={item.comment}
+            placeholder={commentPlaceholder ?? 'Add a comment...'}
+            onSave={(v) => onUpdate(item.id, { comment: v })}
+          />
         </div>
       </div>
+    </div>
+  );
+}
+
+// A project = a header (name, status, due, notes) with its action items nested beneath.
+function ProjectGroup({
+  project,
+  actions,
+  onUpdate,
+}: {
+  project: BrainItem;
+  actions: BrainItem[];
+  onUpdate: (id: string, f: EditableFields) => void;
+}) {
+  return (
+    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <span className="text-sm font-semibold text-white">{project.title}</span>
+          {project.detail ? (
+            <span className={cn('ml-2 text-xs', statusColor(project.detail))}>{project.detail}</span>
+          ) : null}
+        </div>
+        <DueDate value={project.due_by} warn onChange={(v) => onUpdate(project.id, { due_by: v })} />
+      </div>
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        {project.owner ? (
+          <span>
+            <span className="text-zinc-500">Owner: </span>
+            <span className={ownerColor(project.owner)}>{project.owner}</span>
+          </span>
+        ) : null}
+        {!project.due_by ? <span className="text-amber-400">needs a due date</span> : null}
+      </div>
+      <TextField key={project.notes ?? ''} value={project.notes} placeholder="Project notes..." onSave={(v) => onUpdate(project.id, { notes: v })} />
+      {actions.length > 0 ? (
+        <div className="ml-3 border-l border-zinc-800 pl-3 space-y-2">
+          {actions.map((a) => (
+            <ActionCard key={a.id} item={a} onUpdate={onUpdate} hideProject />
+          ))}
+        </div>
+      ) : (
+        <p className="ml-3 text-xs text-zinc-600">No open actions.</p>
+      )}
     </div>
   );
 }
@@ -211,7 +279,6 @@ export default function BrainPage() {
       .eq('id', id)
       .then((res) => {
         if (!res.error) return;
-        // Persist failed — resync from the server.
         supabase
           .from('brain_items')
           .select(ITEM_SELECT)
@@ -232,11 +299,15 @@ export default function BrainPage() {
 
   const byKind = (k: ItemKind) => items.filter((i) => i.kind === k);
   const projects = byKind('project');
+  const todos = byKind('todo');
   const decisions = byKind('decision');
   const commitments = byKind('commitment');
   const people = byKind('person');
+  const context = byKind('context');
   const insights = byKind('insight');
-  const todos = byKind('todo');
+
+  const projectNames = new Set(projects.map((p) => p.title));
+  const adminTodos = todos.filter((t) => !t.project || !projectNames.has(t.project));
 
   const updated = briefing
     ? new Date(briefing.updated_at).toLocaleString('en-CA', {
@@ -259,7 +330,7 @@ export default function BrainPage() {
               {briefing.briefing_date} - updated {updated}
             </>
           ) : (
-            'Daily briefing from your knowledge vault'
+            'Work top to bottom. Check items off as you action them.'
           )}
         </p>
       </div>
@@ -275,29 +346,13 @@ export default function BrainPage() {
         </Section>
       ) : null}
 
-      <Section title="Open Projects" hint="Set a due-by date and add notes. Projects with no date are flagged in the To-do list.">
+      <Section title="Open Projects" hint="Each project's actions are listed beneath it. Check them off as you go; set a due date where it's missing.">
         {projects.length === 0 ? (
           <p className="text-sm text-zinc-500">No projects.</p>
         ) : (
           <div className="space-y-3">
             {projects.map((p) => (
-              <div key={p.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm font-medium text-white">{p.title}</span>
-                  <DueDate value={p.due_by} warn onChange={(v) => onUpdate(p.id, { due_by: v })} />
-                </div>
-                {p.detail ? <p className="text-sm text-zinc-400 mt-1.5">{p.detail}</p> : null}
-                <p className="text-xs mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
-                  {p.owner ? (
-                    <span>
-                      <span className="text-zinc-500">Owner: </span>
-                      <span className={ownerColor(p.owner)}>{p.owner}</span>
-                    </span>
-                  ) : null}
-                  {p.needs_due_date && !p.due_by ? <span className="text-amber-400">needs a due date</span> : null}
-                </p>
-                <TextField key={p.notes ?? ''} value={p.notes} placeholder="Add notes..." onSave={(v) => onUpdate(p.id, { notes: v })} />
-              </div>
+              <ProjectGroup key={p.id} project={p} actions={todos.filter((t) => t.project === p.title)} onUpdate={onUpdate} />
             ))}
           </div>
         )}
@@ -315,7 +370,15 @@ export default function BrainPage() {
         {people.length === 0 ? empty : <div className="space-y-2">{people.map((p) => <ActionCard key={p.id} item={p} onUpdate={onUpdate} />)}</div>}
       </Section>
 
-      <Section title="Key insights">
+      <Section title="Personal / Admin">
+        {adminTodos.length === 0 ? empty : <div className="space-y-2">{adminTodos.map((t) => <ActionCard key={t.id} item={t} onUpdate={onUpdate} />)}</div>}
+      </Section>
+
+      <Section title="Context needed" hint="The system needs background to do its job. Answer in the comment (or in your Plaud daily note) and it gets folded into the vault.">
+        {context.length === 0 ? empty : <div className="space-y-2">{context.map((c) => <ActionCard key={c.id} item={c} onUpdate={onUpdate} commentPlaceholder="Add the context here..." />)}</div>}
+      </Section>
+
+      <Section title="Key insights" hint="Reference — context to keep in view.">
         {insights.length === 0 ? (
           empty
         ) : (
@@ -331,10 +394,6 @@ export default function BrainPage() {
             ))}
           </ul>
         )}
-      </Section>
-
-      <Section title="To-do list" hint="Check off daily, set dates, add comments, and flag what's out to someone else.">
-        {todos.length === 0 ? empty : <div className="space-y-2">{todos.map((t) => <ActionCard key={t.id} item={t} onUpdate={onUpdate} />)}</div>}
       </Section>
     </div>
   );
