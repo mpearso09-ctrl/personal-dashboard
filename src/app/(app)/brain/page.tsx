@@ -17,7 +17,7 @@ interface Briefing {
   updated_at: string;
 }
 
-type ItemKind = 'project' | 'decision' | 'commitment' | 'person' | 'insight' | 'todo' | 'context';
+type ItemKind = 'project' | 'decision' | 'commitment' | 'person' | 'insight' | 'todo' | 'context' | 'calendar';
 
 interface BrainItem {
   id: string;
@@ -133,6 +133,25 @@ function OutTo({ item, onUpdate }: { item: BrainItem; onUpdate: (id: string, f: 
         />
       ) : null}
     </>
+  );
+}
+
+// A simple calendar row: time+title (in title), location (in detail), check it off as the day goes.
+function CalendarRow({ item, onUpdate }: { item: BrainItem; onUpdate: (id: string, f: EditableFields) => void }) {
+  return (
+    <label className="flex items-start gap-3 cursor-pointer">
+      <input
+        type="checkbox"
+        checked={item.done}
+        onChange={(e) => onUpdate(item.id, { done: e.target.checked })}
+        className="mt-1 h-4 w-4 accent-emerald-500 shrink-0"
+      />
+      <span className="flex-1 min-w-0 text-sm">
+        <span className={item.done ? 'line-through text-zinc-500' : 'text-zinc-100'}>{item.title}</span>
+        {item.detail ? <span className="text-zinc-500"> &middot; {item.detail}</span> : null}
+        {item.owner ? <span className="text-zinc-600 text-xs"> &middot; {item.owner}</span> : null}
+      </span>
+    </label>
   );
 }
 
@@ -298,6 +317,7 @@ export default function BrainPage() {
   }
 
   const byKind = (k: ItemKind) => items.filter((i) => i.kind === k);
+  const calendar = byKind('calendar');
   const projects = byKind('project');
   const todos = byKind('todo');
   const decisions = byKind('decision');
@@ -346,6 +366,36 @@ export default function BrainPage() {
         </Section>
       ) : null}
 
+      <Section title="Today's Calendar" hint="From your Nextcloud calendars (Atlantic time). Check meetings off as they pass.">
+        {calendar.length === 0 ? (
+          <p className="text-sm text-zinc-500">Nothing on the calendar today.</p>
+        ) : (
+          <div className="space-y-2">
+            {calendar.map((c) => (
+              <CalendarRow key={c.id} item={c} onUpdate={onUpdate} />
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Key insights" hint="Reference - context to keep in view.">
+        {insights.length === 0 ? (
+          empty
+        ) : (
+          <ul className="space-y-2">
+            {insights.map((i) => (
+              <li key={i.id} className="text-sm text-zinc-300 flex gap-2.5">
+                <span className="text-blue-400 shrink-0">-</span>
+                <span>
+                  {i.title}
+                  {i.detail ? <span className="text-zinc-500"> - {i.detail}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
       <Section title="Open Projects" hint="Each project's actions are listed beneath it. Check them off as you go; set a due date where it's missing.">
         {projects.length === 0 ? (
           <p className="text-sm text-zinc-500">No projects.</p>
@@ -376,24 +426,6 @@ export default function BrainPage() {
 
       <Section title="Context needed" hint="The system needs background to do its job. Answer in the comment (or in your Plaud daily note) and it gets folded into the vault.">
         {context.length === 0 ? empty : <div className="space-y-2">{context.map((c) => <ActionCard key={c.id} item={c} onUpdate={onUpdate} commentPlaceholder="Add the context here..." />)}</div>}
-      </Section>
-
-      <Section title="Key insights" hint="Reference — context to keep in view.">
-        {insights.length === 0 ? (
-          empty
-        ) : (
-          <ul className="space-y-2">
-            {insights.map((i) => (
-              <li key={i.id} className="text-sm text-zinc-300 flex gap-2.5">
-                <span className="text-blue-400 shrink-0">-</span>
-                <span>
-                  {i.title}
-                  {i.detail ? <span className="text-zinc-500"> - {i.detail}</span> : null}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
       </Section>
     </div>
   );
