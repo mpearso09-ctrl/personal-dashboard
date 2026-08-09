@@ -98,14 +98,32 @@ export interface BudgetDailyEntry {
 
 // ---- Cash Flow (household-scoped, dynamic accounts) ----
 
+export type AccountCurrency = 'CAD' | 'USD';
+export type AccountType = 'chequing' | 'savings' | 'investments';
+export type AccountScope = 'personal' | 'business';
+
 export interface Account {
   id: string;
   household_id: string;
   user_id: string;
   name: string;
   sort_order: number;
+  currency: AccountCurrency;
+  account_type: AccountType;
+  scope: AccountScope;
   created_at: string;
 }
+
+export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
+  chequing: 'Chequing',
+  savings: 'Savings',
+  investments: 'Investments',
+};
+
+export const ACCOUNT_SCOPE_LABELS: Record<AccountScope, string> = {
+  personal: 'Personal',
+  business: 'Business',
+};
 
 export interface AccountBalance {
   id: string;
@@ -208,13 +226,18 @@ export const DEFAULT_BUDGET_CATEGORIES = [
   { name: 'Fun', monthly_amount: 1400 },
 ];
 
-export const DEFAULT_ACCOUNTS = [
-  'Personal Chequing',
-  'Personal Savings',
-  'Frameworks Chequing',
-  'Frameworks Savings',
-  'I-Trade Investments',
-  'Crypto/Kraken',
+export const DEFAULT_ACCOUNTS: {
+  name: string;
+  currency: AccountCurrency;
+  account_type: AccountType;
+  scope: AccountScope;
+}[] = [
+  { name: 'Personal Chequing', currency: 'CAD', account_type: 'chequing', scope: 'personal' },
+  { name: 'Personal Savings', currency: 'CAD', account_type: 'savings', scope: 'personal' },
+  { name: 'Frameworks Chequing', currency: 'CAD', account_type: 'chequing', scope: 'business' },
+  { name: 'Frameworks Savings', currency: 'CAD', account_type: 'savings', scope: 'business' },
+  { name: 'I-Trade Investments', currency: 'CAD', account_type: 'investments', scope: 'personal' },
+  { name: 'Crypto/Kraken', currency: 'CAD', account_type: 'investments', scope: 'personal' },
 ];
 
 export const DEFAULT_NET_WORTH_ASSETS = [
