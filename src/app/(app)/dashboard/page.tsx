@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
 import { useHousehold } from '@/components/household-provider';
 import { formatCurrency, getToday, getDayOfChallenge, cn } from '@/lib/utils';
+import { fetchUsdCadRate, toCad } from '@/lib/fx';
 import type {
   FitnessDaily, FitnessGoals, Account, AccountBalance,
   NetWorthEntry, NetWorthItem, BudgetDailyEntry, IncomeDailyEntry,
@@ -534,12 +535,16 @@ function FinanceSection({ householdId }: { householdId: string }) {
         value: computeNetWorth(allNwEntries.filter((e) => e.month === m)),
       }));
 
-      // Account balances — latest per account
+      // Account balances — latest per account, converted to CAD
+      const fxState = await fetchUsdCadRate();
       const allBalances: AccountBalance[] = balancesRes.data ?? [];
       const accts: Account[] = accountsRes.data ?? [];
       const latestBalances: { account: Account; balance: number | null }[] = accts.map((acct) => {
         const bal = allBalances.find((b) => b.account_id === acct.id);
-        return { account: acct, balance: bal ? Number(bal.balance) : null };
+        return {
+          account: acct,
+          balance: bal ? toCad(Number(bal.balance), acct.currency ?? 'CAD', fxState.rate) : null,
+        };
       });
 
       // Last 3 months income vs spending (using budget_daily date ranges)
@@ -661,13 +666,20 @@ function FinanceSection({ householdId }: { householdId: string }) {
       {hasAccountData ? (
         <Card>
           <div className="flex justify-between items-center mb-3">
-            <p className="text-xs text-zinc-500 uppercase tracking-wide">Accounts</p>
+            <p className="text-xs text-zinc-500 uppercase tracking-wide">Accounts (CAD)</p>
             <p className="text-sm font-semibold text-white">{formatCurrency(totalAccountBalance)}</p>
           </div>
           <div className="space-y-2">
             {data.accounts.map(({ account, balance }) => (
               <div key={account.id} className="flex justify-between items-center">
-                <span className="text-sm text-zinc-400">{account.name}</span>
+                <span className="text-sm text-zinc-400">
+                  {account.name}
+                  {account.currency === 'USD' && (
+                    <span className="ml-1.5 text-[10px] font-medium text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded">
+                      USD
+                    </span>
+                  )}
+                </span>
                 <span className={cn('text-sm font-medium', balance === null ? 'text-zinc-600' : balance >= 0 ? 'text-white' : 'text-red-400')}>
                   {balance === null ? '—' : formatCurrency(balance)}
                 </span>
