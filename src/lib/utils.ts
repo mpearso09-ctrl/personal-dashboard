@@ -1,3 +1,19 @@
+// Fetch every row of a query, paging past Supabase's 1000-row response cap.
+// `makeQuery` receives an inclusive range and must apply .range(from, to).
+export async function fetchAllRows<T>(
+  makeQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null }>,
+  pageSize = 1000
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data } = await makeQuery(from, from + pageSize - 1);
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return all;
+}
+
 export function formatCurrency(amount: number): string {
   return new Intl.NumberFormat('en-CA', {
     style: 'currency',
