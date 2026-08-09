@@ -8,12 +8,15 @@ import type {
   BudgetCategory,
   BudgetDailyEntry,
   Account,
+  AccountScope,
+  AccountType,
   AccountBalance,
   NetWorthItem,
   NetWorthEntry,
   IncomeCategory,
   IncomeDailyEntry,
 } from '@/lib/types';
+import { useUsdCad, toCad } from '@/lib/fx';
 import {
   BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid,
@@ -58,6 +61,20 @@ const ACCOUNT_COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
   '#ec4899', '#06b6d4', '#84cc16',
 ];
+
+const CASH_VIEWS = [
+  { label: 'Total', value: 'total' },
+  { label: 'Business / Personal', value: 'scope' },
+  { label: 'By Type', value: 'type' },
+] as const;
+type CashView = (typeof CASH_VIEWS)[number]['value'];
+
+const SCOPE_LABELS: Record<AccountScope, string> = { business: 'Business', personal: 'Personal' };
+const TYPE_LABELS: Record<AccountType, string> = {
+  chequing: 'Chequing',
+  savings: 'Savings',
+  investments: 'Investments',
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -109,6 +126,7 @@ function getYesterday(): string {
 
 export default function FinanceOverview({ householdId }: { householdId: string }) {
   const supabase = createClient();
+  const fx = useUsdCad();
 
   // State
   const [categories, setCategories] = useState<BudgetCategory[]>([]);
@@ -125,6 +143,21 @@ export default function FinanceOverview({ householdId }: { householdId: string }
   const [timeRange, setTimeRange] = useState<TimeRange>('2m');
   const [granularity, setGranularity] = useState<Granularity>('Monthly');
   const [chartView, setChartView] = useState<ChartView>('income_vs_spending');
+  const [cashView, setCashView] = useState<CashView>('total');
+
+  // account_id → account (for currency/scope/type lookups)
+  const accountById = useMemo(() => {
+    const map: Record<string, Account> = {};
+    for (const a of accounts) map[a.id] = a;
+    return map;
+  }, [accounts]);
+
+  // Convert a raw stored balance to CAD based on its account's native currency
+  const rawToCad = useCallback(
+    (accountId: string, balance: number) =>
+      toCad(balance, accountById[accountId]?.currency ?? 'CAD', fx.rate),
+    [accountById, fx.rate]
+  );
 
   const startDate = getStartDate(timeRange);
   const today = getToday();
@@ -208,9 +241,25 @@ export default function FinanceOverview({ householdId }: { householdId: string }
     return latest;
   }, [allBalances]);
 
+  // Total cash in CAD (USD balances converted at the live rate)
   const totalCash = useMemo(() => {
-    return Object.values(latestBalanceByAccount).reduce((s, v) => s + v.balance, 0);
-  }, [latestBalanceByAccount]);
+    return Object.entries(latestBalanceByAccount).reduce(
+      (s, [accId, v]) => s + rawToCad(accId, v.balance),
+      0
+    );
+  }, [latestBalanceByAccount, rawToCad]);
+
+  // CAD subtotals by scope and account type
+  const cashSubtotals = useMemo(() => {
+    const byScope: Record<AccountScope, number> = { business: 0, personal: 0 };
+    const byType: Record<AccountType, number> = { chequing: 0, savings: 0, investments: 0 };
+    for (const acc of accounts) {
+      const v = rawToCad(acc.id, latestBalanceByAccount[acc.id]?.balance ?? 0);
+      byScope[acc.scope ?? 'personal'] += v;
+      byType[acc.account_type ?? 'chequing'] += v;
+    }
+    return { byScope, byType };
+  }, [accounts, latestBalanceByAccount, rawToCad]);
 
   // Yesterday's balance per account for daily change
   const yesterdayBalanceByAccount = useMemo(() => {
@@ -223,16 +272,24 @@ export default function FinanceOverview({ householdId }: { householdId: string }
     return yBal;
   }, [allBalances, yesterday]);
 
-  // Account balances list for display
+  // Account balances list for display (CAD-converted)
   const accountBalancesList = useMemo(() => {
     return accounts.map((acc) => {
       const latest = latestBalanceByAccount[acc.id];
-      const balance = latest?.balance ?? 0;
-      const yBal = yesterdayBalanceByAccount[acc.id];
-      const dailyChange = yBal !== undefined ? balance - yBal : null;
-      return { id: acc.id, name: acc.name, balance, dailyChange };
+      const balance = rawToCad(acc.id, latest?.balance ?? 0);
+      const yBalRaw = yesterdayBalanceByAccount[acc.id];
+      const dailyChange = yBalRaw !== undefined ? balance - rawToCad(acc.id, yBalRaw) : null;
+      return {
+        id: acc.id,
+        name: acc.name,
+        balance,
+        dailyChange,
+        currency: acc.currency ?? 'CAD',
+        scope: (acc.scope ?? 'personal') as AccountScope,
+        account_type: (acc.account_type ?? 'chequing') as AccountType,
+      };
     });
-  }, [accounts, latestBalanceByAccount, yesterdayBalanceByAccount]);
+  }, [accounts, latestBalanceByAccount, yesterdayBalanceByAccount, rawToCad]);
 
   // Category color map
   const catColorMap = useMemo(() => {
@@ -299,7 +356,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
     for (const b of balances) {
       const key = groupKey(b.date);
       if (!groups[key]) groups[key] = {};
-      groups[key][b.account_id] = Number(b.balance);
+      groups[key][b.account_id] = rawToCad(b.account_id, Number(b.balance));
     }
 
     return Object.entries(groups)
@@ -308,7 +365,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
         period: labelFn(key),
         total: Object.values(accBals).reduce((s, v) => s + v, 0),
       }));
-  }, [balances, granularity]);
+  }, [balances, granularity, rawToCad]);
 
   const accountBalancesChartData = useMemo(() => {
     const groupKey = granularity === 'Weekly' ? getMondayOfWeek : (d: string) => d.slice(0, 7) + '-01';
@@ -319,13 +376,13 @@ export default function FinanceOverview({ householdId }: { householdId: string }
       const key = groupKey(b.date);
       if (!groups[key]) groups[key] = {};
       const accName = accounts.find((a) => a.id === b.account_id)?.name ?? b.account_id;
-      groups[key][accName] = Number(b.balance);
+      groups[key][accName] = rawToCad(b.account_id, Number(b.balance));
     }
 
     return Object.entries(groups)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, accBals]) => ({ period: labelFn(key), ...accBals }));
-  }, [balances, accounts, granularity]);
+  }, [balances, accounts, granularity, rawToCad]);
 
   const debtPaydownData = useMemo(() => {
     const liabilityItems = nwItems.filter((i) => i.type === 'liability');
@@ -341,10 +398,9 @@ export default function FinanceOverview({ householdId }: { householdId: string }
   }, [nwEntries, nwItems]);
 
   const savingsGrowthData = useMemo(() => {
-    // Filter to savings/investment type accounts from account_balances
-    const savingsKeywords = ['saving', 'invest', 'trade', 'crypto', 'kraken'];
-    const savingsAccounts = accounts.filter((a) =>
-      savingsKeywords.some((kw) => a.name.toLowerCase().includes(kw))
+    // Savings/investments accounts by their configured type
+    const savingsAccounts = accounts.filter(
+      (a) => a.account_type === 'savings' || a.account_type === 'investments'
     );
 
     if (savingsAccounts.length === 0) {
@@ -370,13 +426,13 @@ export default function FinanceOverview({ householdId }: { householdId: string }
       if (!acc) continue;
       const key = groupKey(b.date);
       if (!groups[key]) groups[key] = {};
-      groups[key][acc.name] = Number(b.balance);
+      groups[key][acc.name] = rawToCad(b.account_id, Number(b.balance));
     }
 
     return Object.entries(groups)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, accBals]) => ({ period: labelFn(key), ...accBals }));
-  }, [balances, accounts, nwItems, nwEntries, granularity]);
+  }, [balances, accounts, nwItems, nwEntries, granularity, rawToCad]);
 
   // Budget vs actual summary table
   const budgetSummary = useMemo(() => {
@@ -393,9 +449,8 @@ export default function FinanceOverview({ householdId }: { householdId: string }
 
   // Savings accounts for chart
   const savingsAccountNames = useMemo(() => {
-    const savingsKeywords = ['saving', 'invest', 'trade', 'crypto', 'kraken'];
-    return accounts.filter((a) =>
-      savingsKeywords.some((kw) => a.name.toLowerCase().includes(kw))
+    return accounts.filter(
+      (a) => a.account_type === 'savings' || a.account_type === 'investments'
     );
   }, [accounts]);
 
@@ -453,10 +508,10 @@ export default function FinanceOverview({ householdId }: { householdId: string }
         />
         <SummaryCard
           icon={<Wallet size={16} />}
-          label="Total Cash"
+          label="Total Cash (CAD)"
           value={formatCurrency(totalCash)}
           valueColor="text-white"
-          subtitle={`${accounts.length} accounts`}
+          subtitle={`${accounts.length} accounts · USD→CAD ${fx.rate.toFixed(4)}${fx.isLive ? '' : ' (offline)'}`}
         />
       </div>
 
@@ -464,44 +519,64 @@ export default function FinanceOverview({ householdId }: { householdId: string }
       {accountBalancesList.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center justify-between text-base">
+            <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
               <div className="flex items-center gap-2">
                 <Wallet size={18} className="text-blue-400" />
-                Account Balances
+                Account Balances (CAD)
               </div>
-              <span className="text-lg font-bold text-white">{formatCurrency(totalCash)}</span>
-            </CardTitle>
-          </CardHeader>
-          <div className="space-y-1">
-            {accountBalancesList.map((acc) => (
-              <div
-                key={acc.id}
-                className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-zinc-800/50 transition-colors"
-              >
-                <span className="text-sm text-white">{acc.name}</span>
-                <div className="flex items-center gap-3">
-                  {acc.dailyChange !== null && acc.dailyChange !== 0 && (
-                    <span
+              <div className="flex items-center gap-3">
+                <div className="flex bg-zinc-800 rounded-lg p-0.5">
+                  {CASH_VIEWS.map((v) => (
+                    <button
+                      key={v.value}
+                      onClick={() => setCashView(v.value)}
                       className={cn(
-                        'flex items-center gap-0.5 text-xs font-medium',
-                        acc.dailyChange > 0 ? 'text-emerald-400' : 'text-red-400'
+                        'px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
+                        cashView === v.value
+                          ? 'bg-blue-600 text-white'
+                          : 'text-zinc-400 hover:text-white'
                       )}
                     >
-                      {acc.dailyChange > 0 ? (
-                        <ArrowUpRight size={12} />
-                      ) : (
-                        <ArrowDownRight size={12} />
-                      )}
-                      {formatCurrency(Math.abs(acc.dailyChange))}
-                    </span>
-                  )}
-                  <span className="text-sm font-medium text-zinc-300 tabular-nums text-right">
-                    {formatCurrency(acc.balance)}
-                  </span>
+                      {v.label}
+                    </button>
+                  ))}
                 </div>
+                <span className="text-lg font-bold text-white">{formatCurrency(totalCash)}</span>
               </div>
-            ))}
-          </div>
+            </CardTitle>
+          </CardHeader>
+          {cashView === 'total' ? (
+            <AccountRows rows={accountBalancesList} />
+          ) : (
+            <div className="space-y-4">
+              {(cashView === 'scope'
+                ? (['business', 'personal'] as const).map((s) => ({
+                    label: SCOPE_LABELS[s],
+                    rows: accountBalancesList.filter((a) => a.scope === s),
+                    subtotal: cashSubtotals.byScope[s],
+                  }))
+                : (['chequing', 'savings', 'investments'] as const).map((t) => ({
+                    label: TYPE_LABELS[t],
+                    rows: accountBalancesList.filter((a) => a.account_type === t),
+                    subtotal: cashSubtotals.byType[t],
+                  }))
+              )
+                .filter((g) => g.rows.length > 0)
+                .map((g) => (
+                  <div key={g.label}>
+                    <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800/60 rounded-lg mb-1">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                        {g.label}
+                      </span>
+                      <span className="text-sm font-bold text-white tabular-nums">
+                        {formatCurrency(g.subtotal)}
+                      </span>
+                    </div>
+                    <AccountRows rows={g.rows} />
+                  </div>
+                ))}
+            </div>
+          )}
         </Card>
       )}
 
@@ -671,6 +746,50 @@ export default function FinanceOverview({ householdId }: { householdId: string }
           </div>
         </Card>
       )}
+    </div>
+  );
+}
+
+// ─── Account Rows ───────────────────────────────────────────────────────────
+
+function AccountRows({
+  rows,
+}: {
+  rows: { id: string; name: string; balance: number; dailyChange: number | null; currency: string }[];
+}) {
+  return (
+    <div className="space-y-1">
+      {rows.map((acc) => (
+        <div
+          key={acc.id}
+          className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-zinc-800/50 transition-colors"
+        >
+          <span className="text-sm text-white">
+            {acc.name}
+            {acc.currency === 'USD' && (
+              <span className="ml-1.5 text-[10px] font-medium text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded">
+                USD
+              </span>
+            )}
+          </span>
+          <div className="flex items-center gap-3">
+            {acc.dailyChange !== null && acc.dailyChange !== 0 && (
+              <span
+                className={cn(
+                  'flex items-center gap-0.5 text-xs font-medium',
+                  acc.dailyChange > 0 ? 'text-emerald-400' : 'text-red-400'
+                )}
+              >
+                {acc.dailyChange > 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                {formatCurrency(Math.abs(acc.dailyChange))}
+              </span>
+            )}
+            <span className="text-sm font-medium text-zinc-300 tabular-nums text-right">
+              {formatCurrency(acc.balance)}
+            </span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
