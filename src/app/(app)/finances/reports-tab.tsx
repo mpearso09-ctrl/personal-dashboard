@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, cn, getToday } from '@/lib/utils';
 import type { MonthlyReport, ReportData, ReportRecipient, ReportMonthlyTrend } from '@/lib/types';
+import { fetchUsdCadRate, toCad, type Currency } from '@/lib/fx';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
@@ -138,14 +139,19 @@ async function generateReportData(
   const netWorthPrevMonth = prevTotalAssets - prevTotalLiab;
   const netWorthChange = netWorthCurrent - netWorthPrevMonth;
 
-  // Cash accounts — latest balance per account within month
+  // Cash accounts — latest balance per account within month, converted to CAD
+  const fxState = await fetchUsdCadRate();
+  const accCurrency: Record<string, Currency> = {};
+  for (const a of accounts ?? []) accCurrency[a.id] = (a.currency as Currency) ?? 'CAD';
+  const balToCad = (acctId: string, v: number) => toCad(v, accCurrency[acctId] ?? 'CAD', fxState.rate);
+
   const latestBalanceForAccount = (balances: { account_id: string; balance: number }[], acctId: string) =>
     (balances ?? []).find((b) => b.account_id === acctId)?.balance ?? 0;
 
   const cashAccounts = (accounts ?? []).map((a) => ({
-    name: a.name,
-    balance: latestBalanceForAccount(balancesCurr ?? [], a.id),
-    prevBalance: latestBalanceForAccount(balancesPrev ?? [], a.id),
+    name: a.currency === 'USD' ? `${a.name} (USD→CAD)` : a.name,
+    balance: balToCad(a.id, latestBalanceForAccount(balancesCurr ?? [], a.id)),
+    prevBalance: balToCad(a.id, latestBalanceForAccount(balancesPrev ?? [], a.id)),
   }));
 
   // 6-month trends
@@ -184,7 +190,7 @@ async function generateReportData(
     // Total cash: latest balance per account up to mEnd
     const cashMap: Record<string, number> = {};
     for (const b of (trendBalances ?? []).filter((b) => b.date >= mStart && b.date <= mEnd)) {
-      if (!(b.account_id in cashMap)) cashMap[b.account_id] = b.balance;
+      if (!(b.account_id in cashMap)) cashMap[b.account_id] = balToCad(b.account_id, b.balance);
     }
     const totalCash = Object.values(cashMap).reduce((s, v) => s + v, 0);
 
