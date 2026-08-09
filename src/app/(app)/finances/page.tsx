@@ -12,6 +12,7 @@ import {
   getToday,
   getWeekStart,
   cn,
+  fetchAllRows,
 } from '@/lib/utils';
 import type {
   BudgetCategory,
@@ -1708,13 +1709,18 @@ function CashFlowTab({
 
   const loadTrendData = useCallback(async () => {
     const ninetyDaysAgo = getDaysAgo(90);
-    const { data } = await supabase
-      .from('account_balances')
-      .select('*, accounts(name,currency,scope,account_type)')
-      .eq('household_id', householdId)
-      .gte('date', ninetyDaysAgo)
-      .order('date');
-    if (data) setTrendRows(data as TrendRow[]);
+    // 90 days × all accounts can exceed Supabase's 1000-row cap — page through it
+    const rows = await fetchAllRows<TrendRow>((from, to) =>
+      supabase
+        .from('account_balances')
+        .select('*, accounts(name,currency,scope,account_type)')
+        .eq('household_id', householdId)
+        .gte('date', ninetyDaysAgo)
+        .order('date')
+        .order('id')
+        .range(from, to)
+    );
+    setTrendRows(rows);
   }, [householdId]);
 
   const loadFormBalances = useCallback(async () => {
