@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
-import { formatCurrency, getToday, getWeekStart, cn } from '@/lib/utils';
+import { formatCurrency, getToday, getWeekStart, cn, fetchAllRows } from '@/lib/utils';
 import type {
   BudgetCategory,
   BudgetDailyEntry,
@@ -167,15 +167,20 @@ export default function FinanceOverview({ householdId }: { householdId: string }
   const loadData = useCallback(async () => {
     const [
       catRes, budgetRes, incCatRes, incRes,
-      accRes, balRes, allBalRes, nwItemRes, nwEntryRes,
+      accRes, balRows, allBalRows, nwItemRes, nwEntryRes,
     ] = await Promise.all([
       supabase.from('budget_categories').select('*').eq('household_id', householdId).order('sort_order'),
       supabase.from('budget_daily').select('*').eq('household_id', householdId).order('date'),
       supabase.from('income_categories').select('*').eq('household_id', householdId).order('sort_order'),
       supabase.from('income_daily').select('*').eq('household_id', householdId).order('date'),
       supabase.from('accounts').select('*').eq('household_id', householdId).order('sort_order'),
-      supabase.from('account_balances').select('*').eq('household_id', householdId).gte('date', startDate).lte('date', today).order('date'),
-      supabase.from('account_balances').select('*').eq('household_id', householdId).order('date'),
+      // account_balances can exceed Supabase's 1000-row cap — page through it
+      fetchAllRows<AccountBalance>((from, to) =>
+        supabase.from('account_balances').select('*').eq('household_id', householdId).gte('date', startDate).lte('date', today).order('date').order('id').range(from, to)
+      ),
+      fetchAllRows<AccountBalance>((from, to) =>
+        supabase.from('account_balances').select('*').eq('household_id', householdId).order('date').order('id').range(from, to)
+      ),
       supabase.from('net_worth_items').select('*').eq('household_id', householdId).order('sort_order'),
       supabase.from('net_worth_entries').select('*').eq('household_id', householdId).order('month'),
     ]);
@@ -185,8 +190,8 @@ export default function FinanceOverview({ householdId }: { householdId: string }
     setIncomeCategories(incCatRes.data ?? []);
     setIncomeEntries(incRes.data ?? []);
     setAccounts(accRes.data ?? []);
-    setBalances(balRes.data ?? []);
-    setAllBalances(allBalRes.data ?? []);
+    setBalances(balRows);
+    setAllBalances(allBalRows);
     setNwItems(nwItemRes.data ?? []);
     setNwEntries(nwEntryRes.data ?? []);
     setLoading(false);
