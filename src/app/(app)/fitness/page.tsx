@@ -1,88 +1,31 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { MilestonesTab } from './milestones-tab';
+import { TrendsTab } from './trends-tab';
+import {
+  BODY_FIELDS, NUTRITION_FIELDS, ACTIVITY_FIELDS, HABIT_FIELDS, DRINK_FIELDS, EMPTY_DAY, SCORE_METRICS,
+  shiftDate, fmtNum, avg, totalDrinks, shortDay, streak, type NumField, type BoolField, type DrinkField, type Hit, type MetricDef,
+} from './fitness-lib';
 import { createClient } from '@/lib/supabase-browser';
-import type { FitnessDaily, FitnessWeekly, FitnessGoals, MilestoneType, MilestoneEntry } from '@/lib/types';
-import { DEFAULT_WEIGHTLIFTING_MILESTONES, DEFAULT_CARDIO_MILESTONES, REP_MAXES } from '@/lib/types';
-import { getToday, getWeekStart, getDayOfChallenge, getStatusColor, cn, formatDate } from '@/lib/utils';
+import type { FitnessDaily, FitnessGoals } from '@/lib/types';
+import { getToday, getDayOfChallenge, getStatusColor, cn, formatDate } from '@/lib/utils';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/components/auth-provider';
 import { useHousehold } from '@/components/household-provider';
 import {
-  Dumbbell, Footprints, Moon, Flame, Beef, Wheat, Droplets, Salad,
-  Save, Check, X, ChevronLeft, ChevronRight, Calendar, Weight,
-  TrendingUp, Activity, Target, ClipboardList, BarChart3, Camera, Plus, Trophy,
-  Pencil, Trash2,
+  Dumbbell, Footprints, Flame, Beef, Target, ClipboardList, BarChart3, CalendarDays, Trophy, Plus, Minus, Check,
+  ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Wine, StretchHorizontal, Sunset,
 } from 'lucide-react';
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, ReferenceLine,
-} from 'recharts';
-
-// ---------------------------------------------------------------------------
-// Field definitions
-// ---------------------------------------------------------------------------
-
-const CUMULATIVE_FIELDS = new Set([
-  'calories_consumed', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'steps',
-]);
-
-const dailyFields = [
-  { name: 'calories_consumed', label: 'Calories', type: 'number', icon: Flame, goalMin: undefined as string | undefined, goalMax: 'calories_max' as string | undefined, unit: '' },
-  { name: 'protein_g', label: 'Protein', type: 'number', icon: Beef, goalMin: 'protein_min', goalMax: undefined, unit: 'g' },
-  { name: 'carbs_g', label: 'Carbs', type: 'number', icon: Wheat, goalMin: 'carbs_min', goalMax: 'carbs_max', unit: 'g' },
-  { name: 'fat_g', label: 'Fat', type: 'number', icon: Droplets, goalMin: 'fat_min', goalMax: 'fat_max', unit: 'g' },
-  { name: 'fiber_g', label: 'Fiber', type: 'number', icon: Salad, goalMin: 'fiber_min', goalMax: 'fiber_max', unit: 'g' },
-  { name: 'steps', label: 'Steps', type: 'number', icon: Footprints, goalMin: 'steps_min', goalMax: undefined, unit: '' },
-  { name: 'sleep_hours', label: 'Sleep (hrs)', type: 'number', icon: Moon, goalMin: 'sleep_min', goalMax: undefined, unit: '' },
-  { name: 'calories_burned', label: 'Cals Burned', type: 'number', icon: Activity, goalMin: 'calories_burned_min', goalMax: undefined, unit: '' },
-];
-
-const toggleFields = [
-  { name: 'workout', label: 'Workout' },
-  { name: 'mobility', label: 'Mobility' },
-];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getPreviousMondays(count: number): string[] {
-  const mondays: string[] = [];
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  // Go to most recent Monday
-  const day = d.getDay();
-  d.setDate(d.getDate() - ((day + 6) % 7));
-  for (let i = 0; i < count; i++) {
-    mondays.push(d.toISOString().split('T')[0]);
-    d.setDate(d.getDate() - 7);
-  }
-  return mondays;
-}
-
-function shiftDate(date: string, days: number): string {
-  const d = new Date(date + 'T00:00:00');
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
-
-function formatTotal(value: number | null | undefined, unit: string): string {
-  if (value === null || value === undefined) return `0${unit}`;
-  if (unit === '' && value >= 1000) return value.toLocaleString();
-  return `${value}${unit}`;
-}
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-type TabKey = 'today' | 'weekly' | 'history' | 'trends' | 'milestones';
-
+type TabKey = 'today' | 'week' | 'trends' | 'milestones';
 const tabs: { key: TabKey; label: string; icon: typeof Dumbbell }[] = [
   { key: 'today', label: 'Today', icon: ClipboardList },
-  { key: 'weekly', label: 'Weekly Photos', icon: Camera },
-  { key: 'history', label: 'History', icon: Calendar },
+  { key: 'week', label: 'Week', icon: CalendarDays },
   { key: 'trends', label: 'Trends', icon: BarChart3 },
   { key: 'milestones', label: 'Milestones', icon: Trophy },
 ];
@@ -95,1839 +38,558 @@ export default function FitnessPage() {
 
   const effectiveUserId = user ? (viewingUserId ?? user.id) : '';
   const isViewingOther = viewingUserId !== null && user !== null && viewingUserId !== user.id;
+  const readOnly = isViewingOther;
 
   const [activeTab, setActiveTab] = useState<TabKey>('today');
-
-  // --- shared state ---
   const [goals, setGoals] = useState<FitnessGoals | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveMessage, setSaveMessage] = useState('');
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
-  // --- today tab ---
+  // today
   const [selectedDate, setSelectedDate] = useState(getToday());
-  const [dailyForm, setDailyForm] = useState<Partial<FitnessDaily>>({
-    workout: false,
-    mobility: false,
-    training_quality: null,
-    notes: '',
-    weight_lbs: null,
-    body_fat_pct: null,
-  });
-
-  // State for the "add amount" inputs on cumulative fields
+  const [day, setDay] = useState<Partial<FitnessDaily>>(EMPTY_DAY);
+  const dayRef = useRef(day);
+  useEffect(() => { dayRef.current = day; }, [day]);
   const [addAmounts, setAddAmounts] = useState<Record<string, string>>({});
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // --- weekly tab ---
-  const [weeklyDate, setWeeklyDate] = useState(() => {
-    const mondays = getPreviousMondays(1);
-    return mondays[0];
-  });
-  const [weeklyForm, setWeeklyForm] = useState<Partial<FitnessWeekly>>({
-    photo_taken: false,
-  });
-
-  // --- history tab ---
-  const [historyEntries, setHistoryEntries] = useState<FitnessDaily[]>([]);
-
-  // --- trends tab ---
-  const [weightTrend, setWeightTrend] = useState<{ date: string; weight_lbs: number }[]>([]);
-  const [bodyFatTrend, setBodyFatTrend] = useState<{ date: string; body_fat_pct: number }[]>([]);
-  const [last30Daily, setLast30Daily] = useState<FitnessDaily[]>([]);
+  // history (last 120 days, shared by Week + Trends)
+  const [history, setHistory] = useState<FitnessDaily[]>([]);
+  const [range, setRange] = useState<30 | 60 | 90>(30);
 
   // =========================================================================
-  // Data fetching
+  // Fetching
   // =========================================================================
 
   const fetchGoals = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from('fitness_goals')
-      .select('*')
-      .eq('user_id', effectiveUserId)
-      .single();
-    if (data) setGoals(data as FitnessGoals);
+    const { data } = await supabase.from('fitness_goals').select('*').eq('user_id', effectiveUserId).maybeSingle();
+    setGoals((data as FitnessGoals) ?? null);
   }, [user, effectiveUserId]);
 
-  const fetchDaily = useCallback(async () => {
+  const fetchDay = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from('fitness_daily')
-      .select('*')
-      .eq('user_id', effectiveUserId)
-      .eq('date', selectedDate)
-      .single();
-    if (data) {
-      setDailyForm(data as FitnessDaily);
-    } else {
-      setDailyForm({ workout: false, mobility: false, training_quality: null, notes: '', weight_lbs: null, body_fat_pct: null });
-    }
-    // Clear add amounts when switching dates or reloading
+    const { data } = await supabase.from('fitness_daily').select('*')
+      .eq('user_id', effectiveUserId).eq('date', selectedDate).maybeSingle();
+    setDay(data ? (data as FitnessDaily) : { ...EMPTY_DAY });
     setAddAmounts({});
-  }, [user, selectedDate, effectiveUserId]);
-
-  const fetchWeekly = useCallback(async () => {
-    if (!user) return;
-    const { data } = await supabase
-      .from('fitness_weekly')
-      .select('*')
-      .eq('user_id', effectiveUserId)
-      .eq('date', weeklyDate)
-      .single();
-    if (data) {
-      setWeeklyForm(data as FitnessWeekly);
-    } else {
-      setWeeklyForm({ photo_taken: false });
-    }
-  }, [user, weeklyDate, effectiveUserId]);
+  }, [user, effectiveUserId, selectedDate]);
 
   const fetchHistory = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from('fitness_daily')
-      .select('*')
-      .eq('user_id', effectiveUserId)
-      .order('date', { ascending: false })
-      .limit(14);
-    if (data) setHistoryEntries(data as FitnessDaily[]);
+    const { data } = await supabase.from('fitness_daily').select('*')
+      .eq('user_id', effectiveUserId).gte('date', shiftDate(getToday(), -120)).order('date');
+    setHistory((data as FitnessDaily[]) ?? []);
   }, [user, effectiveUserId]);
 
-  const fetchTrends = useCallback(async () => {
-    if (!user) return;
-
-    // Weight trend from daily entries where weight_lbs is not null
-    const { data: wData } = await supabase
-      .from('fitness_daily')
-      .select('date, weight_lbs')
-      .eq('user_id', effectiveUserId)
-      .not('weight_lbs', 'is', null)
-      .order('date');
-    if (wData) setWeightTrend(wData as { date: string; weight_lbs: number }[]);
-
-    // Body fat trend from daily entries where body_fat_pct is not null
-    const { data: bfData } = await supabase
-      .from('fitness_daily')
-      .select('date, body_fat_pct')
-      .eq('user_id', effectiveUserId)
-      .not('body_fat_pct', 'is', null)
-      .order('date');
-    if (bfData) setBodyFatTrend(bfData as { date: string; body_fat_pct: number }[]);
-
-    // Last 30 days of daily entries
-    const thirtyAgo = shiftDate(getToday(), -30);
-    const { data: dData } = await supabase
-      .from('fitness_daily')
-      .select('*')
-      .eq('user_id', effectiveUserId)
-      .gte('date', thirtyAgo)
-      .order('date', { ascending: true });
-    if (dData) setLast30Daily(dData as FitnessDaily[]);
-  }, [user, effectiveUserId]);
+  useEffect(() => { fetchGoals(); }, [fetchGoals]);
+  useEffect(() => { fetchDay(); }, [fetchDay]);
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
   // =========================================================================
-  // Effects
+  // Saving — every change persists; direct-entry fields are debounced
   // =========================================================================
 
-  useEffect(() => {
-    if (!user) return;
-    fetchGoals();
-  }, [user, fetchGoals]);
-
-  useEffect(() => {
-    if (!user) return;
-    if (activeTab === 'today') fetchDaily();
-  }, [user, activeTab, fetchDaily]);
-
-  useEffect(() => {
-    if (!user) return;
-    if (activeTab === 'weekly') fetchWeekly();
-  }, [user, activeTab, fetchWeekly]);
-
-  useEffect(() => {
-    if (!user) return;
-    if (activeTab === 'history') fetchHistory();
-  }, [user, activeTab, fetchHistory]);
-
-  useEffect(() => {
-    if (!user) return;
-    if (activeTab === 'trends') fetchTrends();
-  }, [user, activeTab, fetchTrends]);
-
-  // =========================================================================
-  // Save handlers
-  // =========================================================================
-
-  const flash = (msg: string) => {
-    setSaveMessage(msg);
-    setTimeout(() => setSaveMessage(''), 2500);
-  };
-
-  /** Build the full daily payload from current form state and upsert. */
-  const upsertDaily = async (formOverrides?: Partial<FitnessDaily>) => {
-    if (!user) return;
-    const merged = { ...dailyForm, ...formOverrides };
-    const payload: Record<string, unknown> = {
-      user_id: user.id,
-      date: selectedDate,
-    };
-    dailyFields.forEach((f) => {
-      const v = (merged as Record<string, unknown>)[f.name];
-      payload[f.name] = v === '' || v === undefined ? null : Number(v);
+  const persist = useCallback(async (next: Partial<FitnessDaily>) => {
+    if (!user || readOnly) return;
+    setSaveState('saving');
+    const payload: Record<string, unknown> = { user_id: user.id, date: selectedDate };
+    ([...BODY_FIELDS, ...NUTRITION_FIELDS, ...ACTIVITY_FIELDS] as { name: NumField }[]).forEach((f) => {
+      const v = next[f.name];
+      payload[f.name] = v === null || v === undefined || (v as unknown) === '' ? null : Number(v);
     });
-    toggleFields.forEach((f) => {
-      payload[f.name] = !!(merged as Record<string, unknown>)[f.name];
-    });
-    payload.training_quality =
-      merged.training_quality === null || merged.training_quality === undefined
-        ? null
-        : Number(merged.training_quality);
-    payload.notes = merged.notes || null;
+    HABIT_FIELDS.forEach((f) => { payload[f.name] = !!next[f.name]; });
+    DRINK_FIELDS.forEach((f) => { payload[f.name] = Number(next[f.name] ?? 0); });
+    payload.notes = next.notes || null;
+    const { error } = await supabase.from('fitness_daily').upsert(payload, { onConflict: 'user_id,date' });
+    setSaveState(error ? 'error' : 'saved');
+    if (!error) {
+      // keep history in sync so Week/Trends reflect today immediately
+      setHistory((h) => {
+        const merged = { ...(h.find((d) => d.date === selectedDate) ?? {}), ...payload } as FitnessDaily;
+        const rest = h.filter((d) => d.date !== selectedDate);
+        return [...rest, merged].sort((a, b) => a.date.localeCompare(b.date));
+      });
+      setTimeout(() => setSaveState('idle'), 1500);
+    }
+  }, [user, readOnly, selectedDate]);
 
-    const weightVal = merged.weight_lbs;
-    const bfVal = merged.body_fat_pct;
-    payload.weight_lbs = weightVal === null || weightVal === undefined || weightVal === ('' as unknown) ? null : Number(weightVal);
-    payload.body_fat_pct = bfVal === null || bfVal === undefined || bfVal === ('' as unknown) ? null : Number(bfVal);
-
-    const { error } = await supabase
-      .from('fitness_daily')
-      .upsert(payload, { onConflict: 'user_id,date' });
-
-    return error;
+  /** Immediate save (toggles, counters, + button) */
+  const update = (patch: Partial<FitnessDaily>) => {
+    const next = { ...dayRef.current, ...patch };
+    setDay(next);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    persist(next);
   };
 
-  const saveDaily = async () => {
-    if (!user) return;
-    setSaving(true);
-    const error = await upsertDaily();
-    setSaving(false);
-    flash(error ? `Error: ${error.message}` : 'Saved!');
+  /** Debounced save (typed numeric fields, notes) */
+  const updateDebounced = (patch: Partial<FitnessDaily>) => {
+    const next = { ...dayRef.current, ...patch };
+    setDay(next);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => persist(next), 600);
   };
 
-  /** Add a value to a cumulative field and immediately save. */
-  const addToCumulative = async (fieldName: string) => {
-    if (!user || isViewingOther) return;
-    const amountStr = addAmounts[fieldName];
-    const amount = Number(amountStr);
-    if (!amountStr || isNaN(amount) || amount === 0) return;
-
-    const currentVal = ((dailyForm as Record<string, unknown>)[fieldName] as number | null) ?? 0;
-    const newVal = currentVal + amount;
-
-    // Update local state immediately
-    const updatedForm = { ...dailyForm, [fieldName]: newVal };
-    setDailyForm(updatedForm);
-    setAddAmounts((prev) => ({ ...prev, [fieldName]: '' }));
-
-    // Save to Supabase
-    setSaving(true);
-    const error = await upsertDaily({ [fieldName]: newVal } as Partial<FitnessDaily>);
-    setSaving(false);
-    flash(error ? `Error: ${error.message}` : 'Saved!');
+  const addTo = (field: NumField) => {
+    const amt = Number(addAmounts[field]);
+    if (!addAmounts[field] || isNaN(amt) || amt === 0) return;
+    const cur = (dayRef.current[field] as number | null) ?? 0;
+    setAddAmounts((p) => ({ ...p, [field]: '' }));
+    update({ [field]: cur + amt } as Partial<FitnessDaily>);
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10);
   };
 
-  const saveWeekly = async () => {
-    if (!user) return;
-    setSaving(true);
-    const payload = {
-      user_id: user.id,
-      date: weeklyDate,
-      photo_taken: !!weeklyForm.photo_taken,
-    };
-    const { error } = await supabase
-      .from('fitness_weekly')
-      .upsert(payload, { onConflict: 'user_id,date' });
-    setSaving(false);
-    flash(error ? `Error: ${error.message}` : 'Saved!');
+  const bump = (field: DrinkField, delta: number) => {
+    const cur = (dayRef.current[field] as number) ?? 0;
+    update({ [field]: Math.max(0, cur + delta) } as Partial<FitnessDaily>);
+  };
+
+  const toggle = (field: BoolField) => {
+    update({ [field]: !dayRef.current[field] } as Partial<FitnessDaily>);
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
   };
 
   // =========================================================================
-  // Derived values
+  // Derived
   // =========================================================================
 
   const challengeDay = goals ? getDayOfChallenge(goals.challenge_start_date) : null;
+  const g = (k: keyof FitnessGoals): number | undefined => goals ? (goals[k] as number | null) ?? undefined : undefined;
 
-  function goalValue(key: string): number | undefined {
-    if (!goals) return undefined;
-    return (goals as unknown as Record<string, number>)[key] ?? undefined;
-  }
-
-  // Scorecard calculation
-  function buildScorecard() {
-    if (!goals || last30Daily.length === 0) return [];
-
-    const metrics: { label: string; field: keyof FitnessDaily; goalMin?: string; goalMax?: string }[] = [
-      { label: 'Calories', field: 'calories_consumed', goalMax: 'calories_max' },
-      { label: 'Protein', field: 'protein_g', goalMin: 'protein_min' },
-      { label: 'Steps', field: 'steps', goalMin: 'steps_min' },
-      { label: 'Sleep', field: 'sleep_hours', goalMin: 'sleep_min' },
-      { label: 'Calories Burned', field: 'calories_burned', goalMin: 'calories_burned_min' },
-      { label: 'Fiber', field: 'fiber_g', goalMin: 'fiber_min', goalMax: 'fiber_max' },
+  const completion = useMemo(() => {
+    const checks = [
+      day.weight_lbs != null, day.calories_consumed != null, day.protein_g != null, day.fiber_g != null,
+      day.steps != null, day.sleep_hours != null, day.calories_burned != null,
     ];
+    return { done: checks.filter(Boolean).length, total: checks.length };
+  }, [day]);
 
-    return metrics.map((m) => {
-      const min = m.goalMin ? goalValue(m.goalMin) : undefined;
-      const max = m.goalMax ? goalValue(m.goalMax) : undefined;
-      let hits = 0;
-      last30Daily.forEach((d) => {
-        const v = d[m.field] as number | null;
-        if (v === null) return;
-        if (min !== undefined && max !== undefined) {
-          if (v >= min && v <= max) hits++;
-        } else if (min !== undefined) {
-          if (v >= min) hits++;
-        } else if (max !== undefined) {
-          if (v <= max) hits++;
-        }
-      });
-      return { label: m.label, hits, total: last30Daily.length };
-    });
-  }
+  const last7 = useMemo(() => {
+    const dates = Array.from({ length: 7 }, (_, i) => shiftDate(getToday(), -6 + i));
+    const map = new Map(history.map((d) => [d.date, d]));
+    return dates.map((date) => ({ date, entry: map.get(date) ?? null }));
+  }, [history]);
+
+  const rangeData = useMemo(() => {
+    const from = shiftDate(getToday(), -range);
+    return history.filter((d) => d.date >= from);
+  }, [history, range]);
+
+  const thisMonth = useMemo(() => history.filter((d) => d.date.slice(0, 7) === getToday().slice(0, 7)), [history]);
+  const lastMonth = useMemo(() => {
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
+    const key = d.toISOString().slice(0, 7);
+    return history.filter((x) => x.date.slice(0, 7) === key);
+  }, [history]);
+
+  const streaks = useMemo(() => {
+    if (!goals) return [];
+    return [
+      { label: 'Workouts', ...streak(history, (d) => d.workout), icon: Dumbbell },
+      { label: 'Stretching', ...streak(history, (d) => d.stretching), icon: StretchHorizontal },
+      { label: 'Evening Walks', ...streak(history, (d) => d.evening_walk), icon: Sunset },
+      { label: 'Dry Days', ...streak(history, (d) => totalDrinks(d) === 0), icon: Wine },
+      { label: 'Protein Goal', ...streak(history, (d) => (d.protein_g ?? 0) >= goals.protein_min), icon: Beef },
+      { label: 'Steps Goal', ...streak(history, (d) => (d.steps ?? 0) >= goals.steps_min), icon: Footprints },
+    ];
+  }, [history, goals]);
+
+  /** latest value + change vs 7 days earlier */
+  const bodyTrend = (field: NumField) => {
+    const pts = history.filter((d) => d[field] != null);
+    if (!pts.length) return { latest: null as number | null, delta: null as number | null };
+    const latest = pts[pts.length - 1][field] as number;
+    const weekAgo = pts.filter((d) => d.date <= shiftDate(pts[pts.length - 1].date, -7));
+    const ref = weekAgo.length ? (weekAgo[weekAgo.length - 1][field] as number) : null;
+    return { latest, delta: ref === null ? null : latest - ref };
+  };
 
   // =========================================================================
-  // Render guards
+  // Guards
   // =========================================================================
 
   if (authLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
-      </div>
-    );
+    return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" /></div>;
   }
-
-  if (!user) {
-    return <p className="text-zinc-400 p-8">Please sign in to view fitness data.</p>;
-  }
+  if (!user) return <p className="text-zinc-400 p-8">Please sign in to view fitness data.</p>;
 
   // =========================================================================
-  // Sub-renders
+  // Shared bits
   // =========================================================================
 
-  const renderTodayTab = () => {
-    const cumulativeFields = dailyFields.filter((f) => CUMULATIVE_FIELDS.has(f.name));
-    const directFields = dailyFields.filter((f) => !CUMULATIVE_FIELDS.has(f.name));
-
-    return (
-      <div className="space-y-6">
-        {/* Challenge banner */}
-        {goals && challengeDay !== null && (
-          <div className="flex items-center gap-3 bg-blue-600/20 border border-blue-600/40 rounded-lg px-4 py-3">
-            <Target className="h-5 w-5 text-blue-400" />
-            <span className="text-blue-300 font-medium">
-              {goals.challenge_name}: Day {challengeDay} of {goals.challenge_days}
-            </span>
-          </div>
-        )}
-
-        {/* Date selector */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
-            className="p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 min-h-[44px] min-w-[44px] flex items-center justify-center"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm min-h-[44px]"
-          />
-          <button
-            onClick={() => setSelectedDate(shiftDate(selectedDate, 1))}
-            className="p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 min-h-[44px] min-w-[44px] flex items-center justify-center"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => setSelectedDate(getToday())}
-            className="text-sm text-blue-400 hover:text-blue-300 ml-1 min-h-[44px] px-2 flex items-center"
-          >
-            Today
-          </button>
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Daily Entry &mdash; {formatDate(selectedDate)}</CardTitle>
-          </CardHeader>
-
-          {/* Weight & Body Fat (optional, at the top) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 text-sm text-zinc-400">
-                <Weight className="h-4 w-4" />
-                Weight (lbs)
-                {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_weight})</span>}
-              </label>
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                value={dailyForm.weight_lbs ?? ''}
-                onChange={(e) =>
-                  setDailyForm((prev) => ({
-                    ...prev,
-                    weight_lbs: e.target.value === '' ? null : Number(e.target.value),
-                  }))
-                }
-                disabled={isViewingOther}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50 min-h-[44px]"
-                placeholder="-- (optional)"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 text-sm text-zinc-400">
-                <TrendingUp className="h-4 w-4" />
-                Body Fat %
-                {goals && <span className="text-xs text-zinc-500">(goal: {goals.goal_body_fat}%)</span>}
-              </label>
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                value={dailyForm.body_fat_pct ?? ''}
-                onChange={(e) =>
-                  setDailyForm((prev) => ({
-                    ...prev,
-                    body_fat_pct: e.target.value === '' ? null : Number(e.target.value),
-                  }))
-                }
-                disabled={isViewingOther}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50 min-h-[44px]"
-                placeholder="-- (optional)"
-              />
-            </div>
-          </div>
-
-          {/* Cumulative fields — total + add input + button */}
-          <div className="mb-6">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">
-              Nutrition &amp; Activity
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {cumulativeFields.map((f) => {
-                const val = (dailyForm as Record<string, unknown>)[f.name] as number | null;
-                const min = f.goalMin ? goalValue(f.goalMin) : undefined;
-                const max = f.goalMax ? goalValue(f.goalMax) : undefined;
-                const color = getStatusColor(val !== null && val !== undefined ? Number(val) : null, min, max);
-                const Icon = f.icon;
-                const addVal = addAmounts[f.name] ?? '';
-
-                return (
-                  <div
-                    key={f.name}
-                    className="flex items-center gap-3 bg-zinc-800/50 border border-zinc-700/50 rounded-lg px-3 py-2.5"
-                  >
-                    {/* Icon + label */}
-                    <div className="flex items-center gap-2 min-w-0 shrink-0">
-                      <Icon className="h-4 w-4 text-zinc-400 shrink-0" />
-                      <span className="text-sm text-zinc-400 whitespace-nowrap">{f.label}</span>
-                    </div>
-
-                    {/* Current total */}
-                    <span className={cn('text-lg font-semibold tabular-nums min-w-[4rem] text-right', color || 'text-white')}>
-                      {formatTotal(val, f.unit)}
-                    </span>
-
-                    {/* Add input + button (hidden when viewing other user) */}
-                    {!isViewingOther && (
-                      <div className="flex items-center gap-1.5 ml-auto shrink-0">
-                        <input
-                          type="number"
-                          inputMode="decimal"
-                          value={addVal}
-                          onChange={(e) =>
-                            setAddAmounts((prev) => ({ ...prev, [f.name]: e.target.value }))
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              addToCumulative(f.name);
-                            }
-                          }}
-                          className="w-20 bg-zinc-900 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white text-right placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none min-h-[44px]"
-                          placeholder="0"
-                        />
-                        <button
-                          onClick={() => addToCumulative(f.name)}
-                          disabled={saving || !addVal}
-                          className="flex items-center justify-center h-11 w-11 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:hover:bg-blue-600 text-white transition-colors shrink-0"
-                          title={`Add to ${f.label}`}
-                        >
-                          <Plus className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {/* Goal range hints */}
-            <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2">
-              {cumulativeFields.map((f) => {
-                const min = f.goalMin ? goalValue(f.goalMin) : undefined;
-                const max = f.goalMax ? goalValue(f.goalMax) : undefined;
-                if (min === undefined && max === undefined) return null;
-                return (
-                  <span key={f.name} className="text-xs text-zinc-500">
-                    {f.label}:{' '}
-                    {min !== undefined && max !== undefined && `${min}-${max}`}
-                    {min !== undefined && max === undefined && `min ${min}`}
-                    {max !== undefined && min === undefined && `max ${max}`}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Non-cumulative numeric fields (sleep, calories burned) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {directFields.map((f) => {
-              const val = (dailyForm as Record<string, unknown>)[f.name] as number | null;
-              const min = f.goalMin ? goalValue(f.goalMin) : undefined;
-              const max = f.goalMax ? goalValue(f.goalMax) : undefined;
-              const color = getStatusColor(val !== null && val !== undefined ? Number(val) : null, min, max);
-              const Icon = f.icon;
-              return (
-                <div key={f.name} className="space-y-1">
-                  <label className="flex items-center gap-2 text-sm text-zinc-400">
-                    <Icon className="h-4 w-4" />
-                    {f.label}
-                    {min !== undefined && max !== undefined && (
-                      <span className="text-xs text-zinc-500">({min}-{max})</span>
-                    )}
-                    {min !== undefined && max === undefined && (
-                      <span className="text-xs text-zinc-500">(min {min})</span>
-                    )}
-                    {max !== undefined && min === undefined && (
-                      <span className="text-xs text-zinc-500">(max {max})</span>
-                    )}
-                  </label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={val ?? ''}
-                    onChange={(e) =>
-                      setDailyForm((prev) => ({
-                        ...prev,
-                        [f.name]: e.target.value === '' ? null : e.target.value,
-                      }))
-                    }
-                    disabled={isViewingOther}
-                    className={cn(
-                      'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm disabled:opacity-50 min-h-[44px]',
-                      color
-                    )}
-                    placeholder="--"
-                  />
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Toggle fields */}
-          <div className="flex flex-wrap gap-4 mt-6">
-            {toggleFields.map((f) => {
-              const checked = !!(dailyForm as Record<string, unknown>)[f.name];
-              return (
-                <button
-                  key={f.name}
-                  onClick={() =>
-                    setDailyForm((prev) => ({
-                      ...prev,
-                      [f.name]: !checked,
-                    }))
-                  }
-                  disabled={isViewingOther}
-                  className={cn(
-                    'flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 min-h-[44px]',
-                    checked
-                      ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
-                      : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600'
-                  )}
-                >
-                  {checked ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
-                  {f.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Training quality slider */}
-          <div className="mt-6 space-y-2">
-            <label className="flex items-center gap-2 text-sm text-zinc-400">
-              <Dumbbell className="h-4 w-4" />
-              Training Quality: {dailyForm.training_quality ?? '--'} / 10
-            </label>
-            <input
-              type="range"
-              min="1"
-              max="10"
-              value={dailyForm.training_quality ?? 5}
-              onChange={(e) =>
-                setDailyForm((prev) => ({
-                  ...prev,
-                  training_quality: Number(e.target.value),
-                }))
-              }
-              disabled={isViewingOther}
-              className="w-full max-w-sm accent-blue-500 disabled:opacity-50"
-            />
-          </div>
-
-          {/* Notes */}
-          <div className="mt-6 space-y-1">
-            <label className="text-sm text-zinc-400">Notes</label>
-            <textarea
-              value={dailyForm.notes ?? ''}
-              onChange={(e) => setDailyForm((prev) => ({ ...prev, notes: e.target.value }))}
-              rows={2}
-              disabled={isViewingOther}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white resize-none disabled:opacity-50"
-              placeholder="Optional notes..."
-            />
-          </div>
-
-          {/* Save */}
-          {!isViewingOther && (
-            <div className="mt-6 flex items-center gap-3">
-              <button
-                onClick={saveDaily}
-                disabled={saving}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
-              >
-                <Save className="h-4 w-4" />
-                {saving ? 'Saving...' : 'Save Entry'}
-              </button>
-              {saveMessage && (
-                <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
-                  {saveMessage}
-                </span>
-              )}
-            </div>
-          )}
-        </Card>
-      </div>
-    );
-  };
-
-  const renderWeeklyTab = () => {
-    const mondays = getPreviousMondays(8);
-    return (
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Weekly Progress Photo</CardTitle>
-          </CardHeader>
-
-          {/* Monday selector */}
-          <div className="mb-6">
-            <label className="text-sm text-zinc-400 block mb-2">Week of (Monday)</label>
-            <select
-              value={weeklyDate}
-              onChange={(e) => setWeeklyDate(e.target.value)}
-              className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm"
-            >
-              {mondays.map((m) => (
-                <option key={m} value={m}>
-                  {formatDate(m)}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Photo taken toggle */}
-          <div>
-            <button
-              onClick={() => setWeeklyForm((prev) => ({ ...prev, photo_taken: !prev.photo_taken }))}
-              disabled={isViewingOther}
-              className={cn(
-                'flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 min-h-[44px]',
-                weeklyForm.photo_taken
-                  ? 'bg-emerald-600/20 border-emerald-600/40 text-emerald-400'
-                  : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600'
-              )}
-            >
-              {weeklyForm.photo_taken ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
-              Progress Photo Taken
-            </button>
-          </div>
-
-          <p className="mt-4 text-xs text-zinc-500">
-            Track whether you took your weekly progress photo. Weight and body fat are now logged in the daily entry.
-          </p>
-
-          {/* Save */}
-          {!isViewingOther && (
-            <div className="mt-6 flex items-center gap-3">
-              <button
-                onClick={saveWeekly}
-                disabled={saving}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors min-h-[44px]"
-              >
-                <Save className="h-4 w-4" />
-                {saving ? 'Saving...' : 'Save'}
-              </button>
-              {saveMessage && (
-                <span className={cn('text-sm', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-emerald-400')}>
-                  {saveMessage}
-                </span>
-              )}
-            </div>
-          )}
-        </Card>
-      </div>
-    );
-  };
-
-  const renderHistoryTab = () => (
-    <Card>
-      <CardHeader>
-        <CardTitle>Last 14 Days</CardTitle>
-      </CardHeader>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-zinc-400 border-b border-zinc-800">
-              <th className="text-left py-2 px-2">Date</th>
-              <th className="text-right py-2 px-2">Weight</th>
-              <th className="text-right py-2 px-2">BF%</th>
-              <th className="text-right py-2 px-2">Cals</th>
-              <th className="text-right py-2 px-2">Protein</th>
-              <th className="text-right py-2 px-2">Steps</th>
-              <th className="text-right py-2 px-2">Sleep</th>
-              <th className="text-center py-2 px-2">Workout</th>
-              <th className="text-right py-2 px-2">Quality</th>
-            </tr>
-          </thead>
-          <tbody>
-            {historyEntries.map((entry) => (
-              <tr key={entry.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                <td className="py-2 px-2 text-zinc-300">{formatDate(entry.date)}</td>
-                <td className="text-right py-2 px-2 text-zinc-300">
-                  {entry.weight_lbs ?? '--'}
-                </td>
-                <td className="text-right py-2 px-2 text-zinc-300">
-                  {entry.body_fat_pct != null ? `${entry.body_fat_pct}%` : '--'}
-                </td>
-                <td className={cn('text-right py-2 px-2', getStatusColor(entry.calories_consumed, undefined, goalValue('calories_max')))}>
-                  {entry.calories_consumed ?? '--'}
-                </td>
-                <td className={cn('text-right py-2 px-2', getStatusColor(entry.protein_g, goalValue('protein_min')))}>
-                  {entry.protein_g ?? '--'}
-                </td>
-                <td className={cn('text-right py-2 px-2', getStatusColor(entry.steps, goalValue('steps_min')))}>
-                  {entry.steps != null ? entry.steps.toLocaleString() : '--'}
-                </td>
-                <td className={cn('text-right py-2 px-2', getStatusColor(entry.sleep_hours, goalValue('sleep_min')))}>
-                  {entry.sleep_hours ?? '--'}
-                </td>
-                <td className="text-center py-2 px-2">
-                  {entry.workout ? (
-                    <Check className="h-4 w-4 text-emerald-400 inline" />
-                  ) : (
-                    <X className="h-4 w-4 text-zinc-600 inline" />
-                  )}
-                </td>
-                <td className="text-right py-2 px-2 text-zinc-300">
-                  {entry.training_quality ?? '--'}
-                </td>
-              </tr>
-            ))}
-            {historyEntries.length === 0 && (
-              <tr>
-                <td colSpan={9} className="text-center text-zinc-500 py-8">
-                  No entries yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </Card>
+  const SaveBadge = () => (
+    <span className={cn('text-xs transition-opacity', saveState === 'idle' ? 'opacity-0' : 'opacity-100',
+      saveState === 'error' ? 'text-red-400' : saveState === 'saving' ? 'text-zinc-500' : 'text-emerald-400')}>
+      {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? '✓ Saved' : saveState === 'error' ? 'Save failed' : ''}
+    </span>
   );
 
-  const renderTrendsTab = () => {
-    const scorecard = buildScorecard();
+  const Ring = ({ done, total }: { done: number; total: number }) => {
+    const r = 18, c = 2 * Math.PI * r, pct = total ? done / total : 0;
+    return (
+      <svg width="48" height="48" viewBox="0 0 48 48" className="shrink-0">
+        <circle cx="24" cy="24" r={r} stroke="#27272a" strokeWidth="5" fill="none" />
+        <circle cx="24" cy="24" r={r} stroke={pct === 1 ? '#10b981' : '#3b82f6'} strokeWidth="5" fill="none"
+          strokeDasharray={c} strokeDashoffset={c * (1 - pct)} strokeLinecap="round"
+          transform="rotate(-90 24 24)" className="transition-all duration-500" />
+        <text x="24" y="28" textAnchor="middle" className="fill-white text-[11px] font-semibold">{done}/{total}</text>
+      </svg>
+    );
+  };
 
-    const weightData = weightTrend.map((w) => ({
-      date: formatDate(w.date),
-      weight: w.weight_lbs,
-    }));
+  // =========================================================================
+  // TODAY
+  // =========================================================================
 
-    const bfData = bodyFatTrend.map((w) => ({
-      date: formatDate(w.date),
-      bf: w.body_fat_pct,
-    }));
+  const renderToday = () => (
+    <div className="space-y-4">
+      {/* Date + completion */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => setSelectedDate(shiftDate(selectedDate, -1))} className="h-11 w-11 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center"><ChevronLeft className="h-5 w-5" /></button>
+          <button onClick={() => setSelectedDate(getToday())} className="h-11 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium min-w-[7.5rem]">
+            {selectedDate === getToday() ? 'Today' : formatDate(selectedDate)}
+          </button>
+          <button onClick={() => setSelectedDate(shiftDate(selectedDate, 1))} disabled={selectedDate >= getToday()} className="h-11 w-11 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center disabled:opacity-30"><ChevronRight className="h-5 w-5" /></button>
+        </div>
+        <div className="flex items-center gap-3">
+          <SaveBadge />
+          <Ring done={completion.done} total={completion.total} />
+        </div>
+      </div>
 
-    const deficitData = last30Daily.map((d) => ({
-      date: formatDate(d.date),
-      deficit:
-        d.calories_burned !== null && d.calories_consumed !== null
-          ? d.calories_burned - d.calories_consumed
-          : null,
-    }));
+      {goals && challengeDay !== null && challengeDay > 0 && (
+        <div className="flex items-center gap-3 bg-blue-600/15 border border-blue-600/30 rounded-xl px-4 py-2.5">
+          <Target className="h-4 w-4 text-blue-400" />
+          <span className="text-blue-300 text-sm font-medium">{goals.challenge_name}: Day {challengeDay} of {goals.challenge_days}</span>
+          <div className="ml-auto h-1.5 w-24 bg-zinc-800 rounded-full overflow-hidden"><div className="h-full bg-blue-500" style={{ width: `${Math.min(100, (challengeDay / goals.challenge_days) * 100)}%` }} /></div>
+        </div>
+      )}
 
-    const chartTooltipStyle = {
-      contentStyle: { backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 8 },
-      labelStyle: { color: '#a1a1aa' },
-      itemStyle: { color: '#fff' },
+      {/* BODY */}
+      <Card>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Body</h3>
+        <div className="grid grid-cols-3 gap-2">
+          {BODY_FIELDS.map((f) => {
+            const Icon = f.icon; const v = day[f.name] as number | null; const goal = g(f.goal);
+            const color = v == null ? 'text-zinc-500' : goal !== undefined && v <= goal ? 'text-emerald-400' : 'text-white';
+            return (
+              <div key={f.name} className="bg-zinc-800/60 rounded-xl p-3">
+                <div className="flex items-center gap-1.5 text-zinc-400 text-xs mb-1"><Icon className="h-3.5 w-3.5" />{f.label}</div>
+                <div className="flex items-baseline gap-1">
+                  <input type="number" inputMode="decimal" step={f.step} value={v ?? ''} disabled={readOnly} placeholder="—"
+                    onChange={(e) => updateDebounced({ [f.name]: e.target.value === '' ? null : Number(e.target.value) } as Partial<FitnessDaily>)}
+                    className={cn('w-full bg-transparent text-2xl font-semibold tabular-nums outline-none placeholder:text-zinc-600 disabled:opacity-60', color)} />
+                  <span className="text-zinc-500 text-sm">{f.unit}</span>
+                </div>
+                {goal !== undefined && <div className="text-[11px] text-zinc-500 mt-0.5">goal {goal}{f.unit}</div>}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* NUTRITION */}
+      <Card>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Nutrition</h3>
+        <div className="space-y-2">
+          {NUTRITION_FIELDS.map((f) => {
+            const Icon = f.icon; const v = day[f.name] as number | null;
+            const min = f.goalMin ? g(f.goalMin) : undefined; const max = f.goalMax ? g(f.goalMax) : undefined;
+            const color = getStatusColor(v, min, max);
+            const target = max ?? min; const pct = target && v ? Math.min(100, (v / target) * 100) : 0;
+            return (
+              <div key={f.name} className="bg-zinc-800/60 rounded-xl px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <Icon className="h-4 w-4 text-zinc-400 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className={cn('text-xl font-semibold tabular-nums', v == null ? 'text-zinc-500' : color)}>{fmtNum(v, f.unit)}</span>
+                      {target !== undefined && <span className="text-xs text-zinc-500">/ {target}{f.unit} {max ? 'max' : 'min'}</span>}
+                    </div>
+                    <div className="h-1 bg-zinc-700/60 rounded-full mt-1.5 overflow-hidden">
+                      <div className={cn('h-full rounded-full transition-all', color.replace('text-', 'bg-'))} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                  {!readOnly && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <input type="number" inputMode="decimal" value={addAmounts[f.name] ?? ''} placeholder="+"
+                        onChange={(e) => setAddAmounts((p) => ({ ...p, [f.name]: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTo(f.name); } }}
+                        className="w-16 h-11 bg-zinc-900 border border-zinc-700 rounded-lg px-2 text-sm text-white text-right focus:border-blue-500 outline-none" />
+                      <button onClick={() => addTo(f.name)} disabled={!addAmounts[f.name]} className="h-11 w-11 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-30 text-white flex items-center justify-center active:scale-95 transition"><Plus className="h-5 w-5" /></button>
+                    </div>
+                  )}
+                </div>
+                <div className="text-[11px] text-zinc-500 mt-1 pl-7">{f.label}</div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* ACTIVITY */}
+      <Card>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Activity</h3>
+        <div className="grid grid-cols-3 gap-2">
+          {ACTIVITY_FIELDS.map((f) => {
+            const Icon = f.icon; const v = day[f.name] as number | null; const min = g(f.goalMin);
+            const color = getStatusColor(v, min);
+            return (
+              <div key={f.name} className="bg-zinc-800/60 rounded-xl p-3">
+                <div className="flex items-center gap-1.5 text-zinc-400 text-xs mb-1"><Icon className="h-3.5 w-3.5" />{f.label}</div>
+                <div className="flex items-baseline gap-1">
+                  <input type="number" inputMode="decimal" step={f.step} value={v ?? ''} disabled={readOnly} placeholder="—"
+                    onChange={(e) => updateDebounced({ [f.name]: e.target.value === '' ? null : Number(e.target.value) } as Partial<FitnessDaily>)}
+                    className={cn('w-full bg-transparent text-2xl font-semibold tabular-nums outline-none placeholder:text-zinc-600 disabled:opacity-60', v == null ? 'text-zinc-500' : color)} />
+                  <span className="text-zinc-500 text-sm">{f.unit}</span>
+                </div>
+                {min !== undefined && <div className="text-[11px] text-zinc-500 mt-0.5">goal {min.toLocaleString()}{f.unit}+</div>}
+                {f.cumulative && !readOnly && (
+                  <div className="flex items-center gap-1 mt-2">
+                    <input type="number" inputMode="numeric" value={addAmounts[f.name] ?? ''} placeholder="+"
+                      onChange={(e) => setAddAmounts((p) => ({ ...p, [f.name]: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTo(f.name); } }}
+                      className="w-full h-9 bg-zinc-900 border border-zinc-700 rounded-lg px-2 text-sm text-white text-right outline-none focus:border-blue-500" />
+                    <button onClick={() => addTo(f.name)} disabled={!addAmounts[f.name]} className="h-9 w-9 rounded-lg bg-blue-600 disabled:opacity-30 text-white flex items-center justify-center shrink-0"><Plus className="h-4 w-4" /></button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* HABITS */}
+      <Card>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Habits</h3>
+        <div className="grid grid-cols-3 gap-2">
+          {HABIT_FIELDS.map((f) => {
+            const Icon = f.icon; const on = !!day[f.name];
+            return (
+              <button key={f.name} onClick={() => !readOnly && toggle(f.name)} disabled={readOnly}
+                className={cn('h-20 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-60',
+                  on ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300' : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-400 hover:border-zinc-600')}>
+                <div className="relative"><Icon className="h-6 w-6" />{on && <Check className="h-3.5 w-3.5 absolute -right-2 -top-1 text-emerald-400" />}</div>
+                <span className="text-xs font-medium">{f.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* DRINKS */}
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Drinks</h3>
+          <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', totalDrinks(day) === 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-800 text-zinc-300')}>
+            {totalDrinks(day) === 0 ? 'Dry day' : `${totalDrinks(day)} total`}
+          </span>
+        </div>
+        <div className="space-y-2">
+          {DRINK_FIELDS.map((f) => {
+            const Icon = f.icon; const v = (day[f.name] as number) ?? 0;
+            return (
+              <div key={f.name} className="flex items-center gap-3 bg-zinc-800/60 rounded-xl px-3 py-2">
+                <Icon className={cn('h-5 w-5', v > 0 ? f.color : 'text-zinc-500')} />
+                <span className="text-sm text-zinc-300 flex-1">{f.label}</span>
+                {!readOnly && <button onClick={() => bump(f.name, -1)} disabled={v === 0} className="h-10 w-10 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-300 flex items-center justify-center disabled:opacity-30 active:scale-95"><Minus className="h-4 w-4" /></button>}
+                <span className={cn('w-8 text-center text-xl font-semibold tabular-nums', v > 0 ? 'text-white' : 'text-zinc-500')}>{v}</span>
+                {!readOnly && <button onClick={() => bump(f.name, 1)} className="h-10 w-10 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-300 flex items-center justify-center active:scale-95"><Plus className="h-4 w-4" /></button>}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* NOTES */}
+      <Card>
+        <textarea value={day.notes ?? ''} disabled={readOnly} placeholder="Notes for the day…" rows={2}
+          onChange={(e) => updateDebounced({ notes: e.target.value })}
+          className="w-full bg-transparent text-sm text-white placeholder:text-zinc-600 outline-none resize-none disabled:opacity-60" />
+      </Card>
+    </div>
+  );
+
+  // =========================================================================
+  // WEEK
+  // =========================================================================
+
+  const renderWeek = () => {
+    const hero = [
+      { label: 'Weight', unit: ' lbs', f: 'weight_lbs' as NumField, goodDown: true, digits: 1 },
+      { label: 'Body Fat', unit: '%', f: 'body_fat_pct' as NumField, goodDown: true, digits: 1 },
+      { label: 'Visceral Fat', unit: '%', f: 'visceral_fat_pct' as NumField, goodDown: true, digits: 1 },
+    ];
+    const weekRate = (m: MetricDef) => {
+      if (!goals) return null;
+      const res = last7.map((d) => (d.entry ? m.test(d.entry, goals) : 'none'));
+      const logged = res.filter((r) => r !== 'none').length;
+      return logged ? Math.round((res.filter((r) => r === 'hit').length / logged) * 100) : null;
     };
+    const mAvg = (rows: FitnessDaily[], f: NumField) => avg(rows.map((r) => r[f] as number | null));
+    const cmp = (label: string, f: NumField, unit: string, digits: number, goodDown = false) => {
+      const a = mAvg(thisMonth, f), b = mAvg(lastMonth, f);
+      const d = a != null && b != null ? a - b : null;
+      const good = d == null ? null : goodDown ? d <= 0 : d >= 0;
+      return { label, a, b, d, unit, digits, good };
+    };
+    const monthRows = [
+      cmp('Weight', 'weight_lbs', ' lbs', 1, true), cmp('Body Fat', 'body_fat_pct', '%', 1, true), cmp('Visceral Fat', 'visceral_fat_pct', '%', 1, true),
+      cmp('Calories', 'calories_consumed', '', 0, true), cmp('Protein', 'protein_g', 'g', 0), cmp('Fiber', 'fiber_g', 'g', 0),
+      cmp('Steps', 'steps', '', 0), cmp('Sleep', 'sleep_hours', 'h', 1), cmp('Cals Burned', 'calories_burned', '', 0),
+    ];
+    const count = (rows: FitnessDaily[], t: (d: FitnessDaily) => boolean) => rows.filter(t).length;
 
     return (
-      <div className="space-y-6">
-        {/* Weight trend */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Weight Trend</CardTitle>
-          </CardHeader>
-          {weightData.length > 1 ? (
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={weightData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="date" tick={{ fill: '#a1a1aa', fontSize: 12 }} />
-                <YAxis tick={{ fill: '#a1a1aa', fontSize: 12 }} domain={['dataMin - 2', 'dataMax + 2']} />
-                <Tooltip {...chartTooltipStyle} />
-                {goals && (
-                  <ReferenceLine y={goals.goal_weight} stroke="#3b82f6" strokeDasharray="5 5" label={{ value: 'Goal', fill: '#3b82f6', fontSize: 12 }} />
+      <div className="space-y-4">
+        {/* Hero */}
+        <div className="grid grid-cols-3 gap-2">
+          {hero.map((h) => {
+            const t = bodyTrend(h.f);
+            const up = t.delta != null && t.delta > 0;
+            const good = t.delta == null ? null : h.goodDown ? t.delta <= 0 : t.delta >= 0;
+            return (
+              <Card key={h.f} className="p-3">
+                <div className="text-xs text-zinc-400">{h.label}</div>
+                <div className="text-2xl font-semibold text-white tabular-nums mt-0.5">{fmtNum(t.latest, h.unit, h.digits)}</div>
+                {t.delta != null && (
+                  <div className={cn('flex items-center gap-1 text-xs mt-0.5', good ? 'text-emerald-400' : 'text-red-400')}>
+                    {up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                    {t.delta > 0 ? '+' : ''}{t.delta.toFixed(1)}{h.unit.trim()} · 7d
+                  </div>
                 )}
-                <Line type="monotone" dataKey="weight" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-zinc-500 text-sm">Not enough data to chart.</p>
-          )}
-        </Card>
-
-        {/* Body fat trend */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Body Fat % Trend</CardTitle>
-          </CardHeader>
-          {bfData.length > 1 ? (
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={bfData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="date" tick={{ fill: '#a1a1aa', fontSize: 12 }} />
-                <YAxis tick={{ fill: '#a1a1aa', fontSize: 12 }} domain={['dataMin - 1', 'dataMax + 1']} />
-                <Tooltip {...chartTooltipStyle} />
-                {goals && (
-                  <ReferenceLine y={goals.goal_body_fat} stroke="#10b981" strokeDasharray="5 5" label={{ value: 'Goal', fill: '#10b981', fontSize: 12 }} />
-                )}
-                <Line type="monotone" dataKey="bf" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981', r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-zinc-500 text-sm">Not enough data to chart.</p>
-          )}
-        </Card>
-
-        {/* Calorie deficit chart */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Daily Calorie Deficit (Last 30 Days)</CardTitle>
-          </CardHeader>
-          {deficitData.filter((d) => d.deficit !== null).length > 1 ? (
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={deficitData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="date" tick={{ fill: '#a1a1aa', fontSize: 10 }} interval="preserveStartEnd" />
-                <YAxis tick={{ fill: '#a1a1aa', fontSize: 12 }} />
-                <Tooltip {...chartTooltipStyle} />
-                <ReferenceLine y={0} stroke="#71717a" />
-                <Bar dataKey="deficit" fill="#3b82f6" radius={[2, 2, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-zinc-500 text-sm">Not enough data to chart.</p>
-          )}
-        </Card>
+              </Card>
+            );
+          })}
+        </div>
 
         {/* Scorecard */}
         <Card>
-          <CardHeader>
-            <CardTitle>30-Day Scorecard</CardTitle>
-          </CardHeader>
-          {scorecard.length > 0 ? (
-            <div className="space-y-3">
-              {scorecard.map((s) => {
-                const pct = s.total > 0 ? Math.round((s.hits / s.total) * 100) : 0;
-                const barColor = pct >= 80 ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-500' : 'bg-red-500';
-                return (
-                  <div key={s.label}>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-zinc-300">{s.label}</span>
-                      <span className="text-zinc-400">
-                        {s.hits}/{s.total} days ({pct}%)
-                      </span>
-                    </div>
-                    <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-                      <div className={cn('h-full rounded-full transition-all', barColor)} style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
+          <CardHeader className="mb-3 flex items-center justify-between"><CardTitle className="text-base">Last 7 Days</CardTitle><span className="text-xs text-zinc-500">tap Today to fill gaps</span></CardHeader>
+          {!goals ? <p className="text-zinc-500 text-sm">Set goals in Settings to see the scorecard.</p> : (
+            <div className="overflow-x-auto -mx-2 px-2">
+              <table className="w-full text-xs">
+                <thead><tr><th className="text-left text-zinc-500 font-normal pb-2 w-16"></th>
+                  {last7.map((d) => <th key={d.date} className={cn('font-medium pb-2', d.date === getToday() ? 'text-blue-400' : 'text-zinc-400')}>{shortDay(d.date)}</th>)}
+                  <th className="text-zinc-500 font-normal pb-2 pl-1">%</th></tr></thead>
+                <tbody>
+                  {SCORE_METRICS.map((m) => {
+                    const rate = weekRate(m);
+                    return (
+                      <tr key={m.key} className="border-t border-zinc-800/60">
+                        <td className="py-1.5 text-zinc-400">{m.short}</td>
+                        {last7.map((d) => {
+                          const r: Hit = d.entry ? m.test(d.entry, goals) : 'none';
+                          return (
+                            <td key={d.date} className="py-1.5 text-center">
+                              <button onClick={() => { setSelectedDate(d.date); setActiveTab('today'); }}
+                                className={cn('inline-block h-4 w-4 rounded-full', r === 'hit' ? 'bg-emerald-500' : r === 'miss' ? 'bg-red-500/80' : 'bg-zinc-700')} />
+                            </td>
+                          );
+                        })}
+                        <td className={cn('py-1.5 text-right tabular-nums pl-1', rate == null ? 'text-zinc-600' : rate >= 80 ? 'text-emerald-400' : rate >= 50 ? 'text-amber-400' : 'text-red-400')}>{rate == null ? '—' : rate}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          ) : (
-            <p className="text-zinc-500 text-sm">No daily data available for the last 30 days.</p>
           )}
+        </Card>
+
+        {/* Streaks */}
+        <Card>
+          <CardHeader className="mb-3"><CardTitle className="text-base">Streaks</CardTitle></CardHeader>
+          <div className="grid grid-cols-3 gap-2">
+            {streaks.map((s) => { const Icon = s.icon; return (
+              <div key={s.label} className="bg-zinc-800/60 rounded-xl p-3">
+                <div className="flex items-center gap-1.5 text-zinc-400 text-[11px]"><Icon className="h-3.5 w-3.5" />{s.label}</div>
+                <div className="flex items-baseline gap-1 mt-1"><Flame className={cn('h-4 w-4', s.current > 0 ? 'text-orange-400' : 'text-zinc-600')} /><span className="text-2xl font-semibold text-white tabular-nums">{s.current}</span></div>
+                <div className="text-[11px] text-zinc-500">best {s.best}</div>
+              </div>
+            ); })}
+          </div>
+        </Card>
+
+        {/* Monthly summary */}
+        <Card>
+          <CardHeader className="mb-3"><CardTitle className="text-base">This Month vs Last</CardTitle></CardHeader>
+          <div className="divide-y divide-zinc-800/60">
+            {monthRows.map((r) => (
+              <div key={r.label} className="flex items-center py-2 text-sm">
+                <span className="text-zinc-400 w-28">{r.label}</span>
+                <span className="text-white tabular-nums flex-1">{fmtNum(r.a, r.unit, r.digits)}</span>
+                <span className="text-zinc-500 tabular-nums flex-1 text-right">{fmtNum(r.b, r.unit, r.digits)}</span>
+                <span className={cn('w-20 text-right tabular-nums text-xs', r.d == null ? 'text-zinc-600' : r.good ? 'text-emerald-400' : 'text-red-400')}>
+                  {r.d == null ? '—' : `${r.d > 0 ? '+' : ''}${r.d.toFixed(r.digits)}`}
+                </span>
+              </div>
+            ))}
+            {[
+              { label: 'Workouts', a: count(thisMonth, (d) => d.workout), b: count(lastMonth, (d) => d.workout) },
+              { label: 'Stretch sessions', a: count(thisMonth, (d) => d.stretching), b: count(lastMonth, (d) => d.stretching) },
+              { label: 'Evening walks', a: count(thisMonth, (d) => d.evening_walk), b: count(lastMonth, (d) => d.evening_walk) },
+              { label: 'Dry days', a: count(thisMonth, (d) => totalDrinks(d) === 0), b: count(lastMonth, (d) => totalDrinks(d) === 0) },
+              { label: 'Total drinks', a: thisMonth.reduce((s, d) => s + totalDrinks(d), 0), b: lastMonth.reduce((s, d) => s + totalDrinks(d), 0), goodDown: true },
+            ].map((r) => { const d = r.a - r.b; const good = r.goodDown ? d <= 0 : d >= 0; return (
+              <div key={r.label} className="flex items-center py-2 text-sm">
+                <span className="text-zinc-400 w-28">{r.label}</span>
+                <span className="text-white tabular-nums flex-1">{r.a}</span>
+                <span className="text-zinc-500 tabular-nums flex-1 text-right">{r.b}</span>
+                <span className={cn('w-20 text-right tabular-nums text-xs', lastMonth.length === 0 ? 'text-zinc-600' : good ? 'text-emerald-400' : 'text-red-400')}>{lastMonth.length === 0 ? '—' : `${d > 0 ? '+' : ''}${d}`}</span>
+              </div>
+            ); })}
+          </div>
+          <div className="flex text-[11px] text-zinc-500 mt-2"><span className="w-28"></span><span className="flex-1">this month</span><span className="flex-1 text-right">last month</span><span className="w-20 text-right">change</span></div>
         </Card>
       </div>
     );
   };
 
   // =========================================================================
-  // Main render
+  // TRENDS
+  // =========================================================================
+
+  // =========================================================================
+  // Main
   // =========================================================================
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-          <Dumbbell className="h-7 w-7 text-blue-500" />
-          Fitness
-        </h1>
-
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold text-white flex items-center gap-3"><Dumbbell className="h-7 w-7 text-blue-500" />Fitness</h1>
         {householdUsers.length > 1 && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-zinc-400">Viewing:</span>
-            <select
-              value={viewingUserId ?? user!.id}
-              onChange={(e) => setViewingUserId(e.target.value === user!.id ? null : e.target.value)}
-              className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white"
-            >
-              {householdUsers.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.id === user!.id ? 'My Data' : u.displayName}
-                </option>
-              ))}
-            </select>
+          <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
+            {householdUsers.map((u) => (
+              <button key={u.id} onClick={() => setViewingUserId(u.id === user.id ? null : u.id)}
+                className={cn('px-3 h-9 rounded-lg text-sm font-medium', (viewingUserId ?? user.id) === u.id ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white')}>
+                {u.id === user.id ? 'Me' : u.displayName}
+              </button>
+            ))}
           </div>
         )}
       </div>
 
       {isViewingOther && (
         <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm">
-          Viewing read-only — this is {householdUsers.find(u => u.id === viewingUserId)?.displayName}&apos;s data
+          Read-only — viewing {householdUsers.find((u) => u.id === viewingUserId)?.displayName}&apos;s data
         </div>
       )}
 
-      {/* Tab bar */}
-      <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 overflow-x-auto">
-        {tabs.map((t) => {
-          const Icon = t.icon;
-          return (
-            <button
-              key={t.key}
-              onClick={() => setActiveTab(t.key)}
-              className={cn(
-                'flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex-1 justify-center whitespace-nowrap min-h-[44px]',
-                activeTab === t.key
-                  ? 'bg-blue-600 text-white'
-                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              {t.label}
-            </button>
-          );
-        })}
+      <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
+        {tabs.map((t) => { const Icon = t.icon; return (
+          <button key={t.key} onClick={() => setActiveTab(t.key)}
+            className={cn('flex items-center justify-center gap-2 flex-1 h-11 rounded-lg text-sm font-medium transition-colors', activeTab === t.key ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800')}>
+            <Icon className="h-4 w-4" /><span className="hidden sm:inline">{t.label}</span>
+          </button>
+        ); })}
       </div>
 
-      {/* Tab content */}
-      {activeTab === 'today' && renderTodayTab()}
-      {activeTab === 'weekly' && renderWeeklyTab()}
-      {activeTab === 'history' && renderHistoryTab()}
-      {activeTab === 'trends' && renderTrendsTab()}
+      {activeTab === 'today' && renderToday()}
+      {activeTab === 'week' && renderWeek()}
+      {activeTab === 'trends' && <TrendsTab rangeData={rangeData} goals={goals} streaks={streaks} range={range} setRange={setRange} />}
       {activeTab === 'milestones' && <MilestonesTab userId={effectiveUserId} isReadOnly={isViewingOther} />}
     </div>
   );
 }
 
-// =============================================================================
-// MilestonesTab
-// =============================================================================
-
-const REPMAX_COLORS: Record<number, string> = {
-  1: '#3b82f6',
-  2: '#8b5cf6',
-  3: '#ec4899',
-  4: '#f97316',
-  5: '#10b981',
-  10: '#eab308',
-};
-
-function MilestonesTab({ userId, isReadOnly }: { userId: string; isReadOnly: boolean }) {
-  const supabase = createClient();
-
-  const [milestoneTypes, setMilestoneTypes] = useState<MilestoneType[]>([]);
-  const [entries, setEntries] = useState<MilestoneEntry[]>([]);
-  const [view, setView] = useState<'grid' | 'detail'>('grid');
-  const [selectedType, setSelectedType] = useState<MilestoneType | null>(null);
-  const [showAddEntry, setShowAddEntry] = useState<string | null>(null); // milestone type id
-  const [editMode, setEditMode] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  // New entry form
-  const [entryDate, setEntryDate] = useState(getToday());
-  const [entryValue, setEntryValue] = useState('');
-  const [entryRepMax, setEntryRepMax] = useState<number>(1);
-  const [entryNotes, setEntryNotes] = useState('');
-  const [entrySaving, setEntrySaving] = useState(false);
-  const [justPR, setJustPR] = useState(false);
-
-  // Custom milestone form
-  const [showAddType, setShowAddType] = useState(false);
-  const [newTypeName, setNewTypeName] = useState('');
-  const [newTypeCategory, setNewTypeCategory] = useState<'weightlifting' | 'cardio' | 'custom'>('custom');
-  const [newTypeUnit, setNewTypeUnit] = useState<'lbs' | 'seconds' | 'pace'>('lbs');
-
-  // Log vs Results screen
-  const [milestoneScreen, setMilestoneScreen] = useState<'log' | 'results'>('results');
-  const [logTypeId, setLogTypeId] = useState<string>('');
-
-  // -------------------------------------------------------------------------
-  // Data loading
-  // -------------------------------------------------------------------------
-
-  const load = useCallback(async () => {
-    const [typesRes, entriesRes] = await Promise.all([
-      supabase.from('milestone_types').select('*').eq('user_id', userId).eq('hidden', false).order('sort_order'),
-      supabase.from('milestone_entries').select('*').eq('user_id', userId).order('date', { ascending: false }),
-    ]);
-    setMilestoneTypes(typesRes.data ?? []);
-    setEntries(entriesRes.data ?? []);
-    setLoading(false);
-  }, [userId]);
-
-  useEffect(() => {
-    setLoading(true);
-    load();
-  }, [load]);
-
-  // -------------------------------------------------------------------------
-  // Seed defaults
-  // -------------------------------------------------------------------------
-
-  async function seedDefaults() {
-    const wLifting = DEFAULT_WEIGHTLIFTING_MILESTONES.map((m) => ({
-      user_id: userId,
-      name: m.name,
-      category: 'weightlifting' as const,
-      unit: 'lbs' as const,
-      is_default: true,
-      sort_order: m.sort_order,
-      hidden: false,
-    }));
-    const cardio = DEFAULT_CARDIO_MILESTONES.map((m) => ({
-      user_id: userId,
-      name: m.name,
-      category: 'cardio' as const,
-      unit: m.unit,
-      is_default: true,
-      sort_order: m.sort_order,
-      hidden: false,
-    }));
-    await supabase.from('milestone_types').insert([...wLifting, ...cardio]);
-    await load();
-  }
-
-  // -------------------------------------------------------------------------
-  // Helpers
-  // -------------------------------------------------------------------------
-
-  function getBest(typeId: string, repMax: number | null): MilestoneEntry | null {
-    const matching = entries.filter(
-      (e) => e.milestone_type_id === typeId && e.rep_max === repMax
-    );
-    if (!matching.length) return null;
-    const type = milestoneTypes.find((t) => t.id === typeId);
-    if (type?.unit === 'lbs') {
-      return matching.reduce((best, e) => (e.value > best.value ? e : best));
-    }
-    return matching.reduce((best, e) => (e.value < best.value ? e : best));
-  }
-
-  function formatValue(value: number, unit: string): string {
-    if (unit === 'lbs') return `${value} lbs`;
-    if (unit === 'seconds') {
-      const m = Math.floor(value / 60);
-      const s = Math.round(value % 60);
-      return m > 0 ? `${m}m ${s}s` : `${s}s`;
-    }
-    if (unit === 'pace') {
-      const h = Math.floor(value / 3600);
-      const m = Math.floor((value % 3600) / 60);
-      const s = Math.round(value % 60);
-      return h > 0
-        ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-        : `${m}:${String(s).padStart(2, '0')}`;
-    }
-    return `${value}`;
-  }
-
-  function parseTimeInput(input: string): number {
-    if (!input.includes(':')) return parseFloat(input);
-    const parts = input.split(':').map(Number);
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  }
-
-  function checkIsPR(typeId: string, repMax: number | null, newValue: number, unit: string): boolean {
-    const best = getBest(typeId, repMax);
-    if (!best) return true;
-    if (unit === 'lbs') return newValue > best.value;
-    return newValue < best.value;
-  }
-
-  // -------------------------------------------------------------------------
-  // Add entry handler
-  // -------------------------------------------------------------------------
-
-  async function handleAddEntry(typeId: string) {
-    const type = milestoneTypes.find((t) => t.id === typeId);
-    if (!type) return;
-    setEntrySaving(true);
-    const rawValue =
-      type.unit === 'lbs' ? parseFloat(entryValue) : parseTimeInput(entryValue);
-    const repMax = type.category === 'weightlifting' ? entryRepMax : null;
-    const isPR = checkIsPR(typeId, repMax, rawValue, type.unit);
-
-    await supabase.from('milestone_entries').insert({
-      user_id: userId,
-      milestone_type_id: typeId,
-      rep_max: repMax,
-      value: rawValue,
-      date: entryDate,
-      notes: entryNotes || null,
-      is_pr: isPR,
-    });
-
-    if (isPR) setJustPR(true);
-    setEntryValue('');
-    setEntryNotes('');
-    setEntrySaving(false);
-    await load();
-    if (isPR) setTimeout(() => setJustPR(false), 3000);
-  }
-
-  // -------------------------------------------------------------------------
-  // Hide type
-  // -------------------------------------------------------------------------
-
-  async function hideType(typeId: string) {
-    await supabase.from('milestone_types').update({ hidden: true }).eq('id', typeId);
-    await load();
-  }
-
-  // -------------------------------------------------------------------------
-  // Delete entry
-  // -------------------------------------------------------------------------
-
-  async function deleteEntry(entryId: string) {
-    await supabase.from('milestone_entries').delete().eq('id', entryId);
-    await load();
-    // Refresh selected type entries in detail view
-    if (selectedType) {
-      const found = milestoneTypes.find((t) => t.id === selectedType.id);
-      if (found) setSelectedType(found);
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Add custom type
-  // -------------------------------------------------------------------------
-
-  async function handleAddType() {
-    if (!newTypeName.trim()) return;
-    const maxSort = milestoneTypes.reduce((m, t) => Math.max(m, t.sort_order), -1);
-    await supabase.from('milestone_types').insert({
-      user_id: userId,
-      name: newTypeName.trim(),
-      category: newTypeCategory,
-      unit: newTypeUnit,
-      is_default: false,
-      sort_order: maxSort + 1,
-      hidden: false,
-    });
-    setNewTypeName('');
-    setShowAddType(false);
-    await load();
-  }
-
-  // -------------------------------------------------------------------------
-  // Derived data
-  // -------------------------------------------------------------------------
-
-  const weightliftingTypes = milestoneTypes.filter((t) => t.category === 'weightlifting');
-  const cardioTypes = milestoneTypes.filter((t) => t.category === 'cardio');
-  const customTypes = milestoneTypes.filter((t) => t.category === 'custom');
-
-  const chartTooltipStyle = {
-    contentStyle: { backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 8 },
-    labelStyle: { color: '#a1a1aa' },
-    itemStyle: { color: '#fff' },
-  };
-
-  // -------------------------------------------------------------------------
-  // Log screen — stable component, no remounting on keystroke
-  // -------------------------------------------------------------------------
-
-  function renderLogScreen() {
-    const allTypes = [...milestoneTypes].sort((a, b) => a.name.localeCompare(b.name));
-    const activeType = allTypes.find((t) => t.id === logTypeId) ?? allTypes[0] ?? null;
-    const isWeightlifting = activeType?.category === 'weightlifting';
-
-    return (
-      <div className="space-y-6 max-w-lg">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setMilestoneScreen('results')}
-            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px] pr-3"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Back to Results
-          </button>
-          <h2 className="text-lg font-semibold text-white">Log Entry</h2>
-        </div>
-
-        {allTypes.length === 0 ? (
-          <p className="text-zinc-500">No milestones set up. Go to Results and load defaults first.</p>
-        ) : (
-          <Card>
-            <div className="space-y-4">
-              {/* Milestone selector */}
-              <div>
-                <label className="text-xs text-zinc-400 block mb-1">Milestone</label>
-                <select
-                  value={activeType?.id ?? ''}
-                  onChange={(e) => { setLogTypeId(e.target.value); setEntryValue(''); setEntryRepMax(1); }}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                >
-                  {(['weightlifting', 'cardio', 'custom'] as const).map((cat) => {
-                    const catTypes = allTypes.filter((t) => t.category === cat);
-                    if (!catTypes.length) return null;
-                    return (
-                      <optgroup key={cat} label={cat.charAt(0).toUpperCase() + cat.slice(1)}>
-                        {catTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </optgroup>
-                    );
-                  })}
-                </select>
-              </div>
-
-              {activeType && (
-                <>
-                  {/* Rep max selector (weightlifting only) */}
-                  {isWeightlifting && (
-                    <div>
-                      <label className="text-xs text-zinc-400 block mb-1">Rep Max</label>
-                      <div className="flex gap-2 flex-wrap">
-                        {REP_MAXES.map((rm) => (
-                          <button
-                            key={rm}
-                            onClick={() => setEntryRepMax(rm)}
-                            className={cn(
-                              'px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors min-h-[44px]',
-                              entryRepMax === rm
-                                ? 'bg-blue-600 border-blue-500 text-white'
-                                : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-500'
-                            )}
-                          >
-                            {rm}RM
-                          </button>
-                        ))}
-                      </div>
-                      {/* Show current best for this RM */}
-                      {(() => {
-                        const best = getBest(activeType.id, entryRepMax);
-                        return best ? (
-                          <p className="text-xs text-zinc-500 mt-1">
-                            Current best: <span className="text-amber-400">{formatValue(best.value, activeType.unit)}</span> on {formatDate(best.date)}
-                          </p>
-                        ) : <p className="text-xs text-zinc-500 mt-1">No previous entry for {entryRepMax}RM</p>;
-                      })()}
-                    </div>
-                  )}
-
-                  {/* Value input */}
-                  <div>
-                    <label className="text-xs text-zinc-400 block mb-1">
-                      {activeType.unit === 'lbs' ? 'Weight (lbs)' : activeType.unit === 'seconds' ? 'Time (seconds or m:ss)' : 'Time (mm:ss or h:mm:ss)'}
-                    </label>
-                    <input
-                      type="text"
-                      value={entryValue}
-                      onChange={(e) => setEntryValue(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && entryValue) handleAddEntry(activeType.id); }}
-                      placeholder={activeType.unit === 'lbs' ? 'e.g. 225' : activeType.unit === 'seconds' ? 'e.g. 90 or 1:30' : 'e.g. 25:30'}
-                      className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2.5 text-lg text-white focus:border-blue-500 focus:outline-none"
-                      autoFocus
-                    />
-                    {/* Show current best for cardio */}
-                    {!isWeightlifting && (() => {
-                      const best = getBest(activeType.id, null);
-                      return best ? (
-                        <p className="text-xs text-zinc-500 mt-1">
-                          Current best: <span className="text-amber-400">{formatValue(best.value, activeType.unit)}</span> on {formatDate(best.date)}
-                        </p>
-                      ) : <p className="text-xs text-zinc-500 mt-1">No previous entries</p>;
-                    })()}
-                  </div>
-
-                  {/* Date and notes */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs text-zinc-400 block mb-1">Date</label>
-                      <input
-                        type="date"
-                        value={entryDate}
-                        onChange={(e) => setEntryDate(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none min-h-[44px]"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-zinc-400 block mb-1">Notes (optional)</label>
-                      <input
-                        type="text"
-                        value={entryNotes}
-                        onChange={(e) => setEntryNotes(e.target.value)}
-                        placeholder="e.g. felt strong"
-                        className="w-full bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none min-h-[44px]"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Save */}
-                  <button
-                    onClick={() => handleAddEntry(activeType.id)}
-                    disabled={entrySaving || !entryValue}
-                    className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-3 rounded-lg text-sm font-semibold transition-colors min-h-[44px]"
-                  >
-                    <Save className="h-4 w-4" />
-                    {entrySaving ? 'Saving...' : 'Save Entry'}
-                  </button>
-                </>
-              )}
-            </div>
-          </Card>
-        )}
-      </div>
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Detail view
-  // -------------------------------------------------------------------------
-
-  function renderDetailView() {
-    if (!selectedType) return null;
-    const typeEntries = entries
-      .filter((e) => e.milestone_type_id === selectedType.id)
-      .sort((a, b) => b.date.localeCompare(a.date));
-
-    const isWeightlifting = selectedType.category === 'weightlifting';
-
-    // Build chart data
-    let chartData: Record<string, unknown>[] = [];
-    if (isWeightlifting) {
-      // Group by date, one value per rep max
-      const dateMap = new Map<string, Record<string, unknown>>();
-      typeEntries.forEach((e) => {
-        if (!dateMap.has(e.date)) dateMap.set(e.date, { date: formatDate(e.date) });
-        const key = `rm${e.rep_max}`;
-        const existing = (dateMap.get(e.date)![key] as number | undefined);
-        const better = selectedType.unit === 'lbs'
-          ? existing === undefined || e.value > existing
-          : existing === undefined || e.value < existing;
-        if (better) dateMap.get(e.date)![key] = e.value;
-      });
-      chartData = Array.from(dateMap.values()).sort((a, b) =>
-        String(a.date).localeCompare(String(b.date))
-      );
-    } else {
-      chartData = typeEntries
-        .map((e) => ({ date: formatDate(e.date), value: e.value, is_pr: e.is_pr }))
-        .reverse();
-    }
-
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => { setView('grid'); setSelectedType(null); }}
-            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px] pr-3"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Back
-          </button>
-          <h2 className="text-lg font-semibold text-white">{selectedType.name}</h2>
-          <span className="text-xs text-zinc-500 capitalize">{selectedType.unit}</span>
-        </div>
-
-        {/* Chart */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Progress Over Time</CardTitle>
-          </CardHeader>
-          {chartData.length > 1 ? (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="date" tick={{ fill: '#a1a1aa', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} />
-                <Tooltip {...chartTooltipStyle} />
-                {isWeightlifting ? (
-                  REP_MAXES.map((rm) => (
-                    <Line
-                      key={rm}
-                      type="monotone"
-                      dataKey={`rm${rm}`}
-                      name={`${rm}RM`}
-                      stroke={REPMAX_COLORS[rm]}
-                      strokeWidth={2}
-                      dot={{ r: 3 }}
-                      connectNulls={false}
-                    />
-                  ))
-                ) : (
-                  <Line
-                    type="monotone"
-                    dataKey="value"
-                    name={selectedType.unit}
-                    stroke="#3b82f6"
-                    strokeWidth={2}
-                    dot={(props: Record<string, unknown>) => {
-                      const { cx, cy, payload } = props as { cx: number; cy: number; payload: { is_pr: boolean } };
-                      return (
-                        <circle
-                          key={`dot-${cx}-${cy}`}
-                          cx={cx}
-                          cy={cy}
-                          r={payload.is_pr ? 6 : 3}
-                          fill={payload.is_pr ? '#eab308' : '#3b82f6'}
-                          stroke={payload.is_pr ? '#854d0e' : '#1d4ed8'}
-                          strokeWidth={1}
-                        />
-                      );
-                    }}
-                  />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-zinc-500 text-sm">Not enough data to chart.</p>
-          )}
-        </Card>
-
-        {/* Entry table */}
-        <Card>
-          <CardHeader>
-            <CardTitle>All Entries</CardTitle>
-          </CardHeader>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-zinc-400 border-b border-zinc-800">
-                  <th className="text-left py-2 px-2">Date</th>
-                  {isWeightlifting && <th className="text-center py-2 px-2">Rep Max</th>}
-                  <th className="text-right py-2 px-2">Value</th>
-                  <th className="text-center py-2 px-2">PR</th>
-                  <th className="text-left py-2 px-2">Notes</th>
-                  {!isReadOnly && <th className="text-center py-2 px-2">Del</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {typeEntries.map((entry) => (
-                  <tr key={entry.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                    <td className="py-2 px-2 text-zinc-300">{formatDate(entry.date)}</td>
-                    {isWeightlifting && (
-                      <td className="py-2 px-2 text-center text-zinc-300">{entry.rep_max}RM</td>
-                    )}
-                    <td className="py-2 px-2 text-right font-medium text-white">
-                      {formatValue(entry.value, selectedType.unit)}
-                    </td>
-                    <td className="py-2 px-2 text-center">
-                      {entry.is_pr && <span className="text-amber-400 text-xs font-semibold">PR</span>}
-                    </td>
-                    <td className="py-2 px-2 text-zinc-400 text-xs">{entry.notes ?? ''}</td>
-                    {!isReadOnly && (
-                      <td className="py-2 px-2 text-center">
-                        <button
-                          onClick={() => deleteEntry(entry.id)}
-                          className="text-zinc-600 hover:text-red-400 transition-colors p-2 inline-flex items-center justify-center min-h-[44px] min-w-[44px]"
-                          title="Delete entry"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-                {typeEntries.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={isWeightlifting ? (isReadOnly ? 5 : 6) : (isReadOnly ? 4 : 5)}
-                      className="text-center text-zinc-500 py-8"
-                    >
-                      No entries yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Grid view
-  // -------------------------------------------------------------------------
-
-  function renderGridView() {
-    // 1RM bar chart data
-    const oneRMData = weightliftingTypes
-      .map((t) => {
-        const best = getBest(t.id, 1);
-        return best ? { name: t.name, value: best.value } : null;
-      })
-      .filter(Boolean) as { name: string; value: number }[];
-
-    function WeightliftingCard({ type }: { type: MilestoneType }) {
-      const isOpen = showAddEntry === type.id;
-      return (
-        <div className="bg-zinc-800/50 border border-zinc-700/50 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <button
-              onClick={() => { setSelectedType(type); setView('detail'); }}
-              className="text-sm font-semibold text-white hover:text-blue-400 transition-colors text-left"
-            >
-              {type.name}
-            </button>
-            <div className="flex items-center gap-2">
-              {editMode && (
-                <button
-                  onClick={() => hideType(type.id)}
-                  className="text-xs text-zinc-500 hover:text-red-400 transition-colors border border-zinc-700 rounded px-2 py-0.5"
-                >
-                  Hide
-                </button>
-              )}
-              {!isReadOnly && !editMode && (
-                <button
-                  onClick={() => { setLogTypeId(type.id); setEntryValue(''); setEntryRepMax(1); setMilestoneScreen('log'); }}
-                  className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-600/40 rounded px-2 py-0.5 transition-colors"
-                >
-                  <Plus className="h-3 w-3" />
-                  Log
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Rep max grid */}
-          <div className="grid grid-cols-6 gap-1 text-center">
-            {REP_MAXES.map((rm) => {
-              const best = getBest(type.id, rm);
-              return (
-                <div key={rm} className="bg-zinc-900/60 rounded p-1.5">
-                  <div className="text-[10px] text-zinc-500 mb-0.5">{rm}RM</div>
-                  <div className="text-xs font-medium text-white leading-tight">
-                    {best ? best.value : '—'}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      );
-    }
-
-    function CardioCard({ type }: { type: MilestoneType }) {
-      const isOpen = showAddEntry === type.id;
-      const typeEntries = entries
-        .filter((e) => e.milestone_type_id === type.id)
-        .sort((a, b) => a.date.localeCompare(b.date));
-      const last10 = typeEntries.slice(-10);
-      const best = getBest(type.id, null);
-
-      return (
-        <div className="bg-zinc-800/50 border border-zinc-700/50 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-1">
-            <button
-              onClick={() => { setSelectedType(type); setView('detail'); }}
-              className="text-sm font-semibold text-white hover:text-blue-400 transition-colors text-left"
-            >
-              {type.name}
-            </button>
-            <div className="flex items-center gap-2">
-              {editMode && (
-                <button
-                  onClick={() => hideType(type.id)}
-                  className="text-xs text-zinc-500 hover:text-red-400 transition-colors border border-zinc-700 rounded px-2 py-0.5"
-                >
-                  Hide
-                </button>
-              )}
-              {!isReadOnly && !editMode && (
-                <button
-                  onClick={() => { setLogTypeId(type.id); setEntryValue(''); setMilestoneScreen('log'); }}
-                  className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-600/40 rounded px-2 py-0.5 transition-colors"
-                >
-                  <Plus className="h-3 w-3" />
-                  Log
-                </button>
-              )}
-            </div>
-          </div>
-
-          {best && (
-            <div className="flex items-baseline gap-2 mb-2">
-              <span className="text-lg font-bold text-amber-400">{formatValue(best.value, type.unit)}</span>
-              <span className="text-xs text-zinc-500">{formatDate(best.date)}</span>
-            </div>
-          )}
-
-          {/* Sparkline */}
-          {last10.length > 1 && (
-            <ResponsiveContainer width="100%" height={48}>
-              <LineChart data={last10.map((e) => ({ date: e.date, value: e.value }))}>
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#3b82f6"
-                  strokeWidth={1.5}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-8">
-        {/* Weightlifting section */}
-        {weightliftingTypes.length > 0 && (
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 mb-3">Weightlifting</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {weightliftingTypes.map((type) => (
-                <WeightliftingCard key={type.id} type={type} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Cardio section */}
-        {cardioTypes.length > 0 && (
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 mb-3">Cardio</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {cardioTypes.map((type) => (
-                <CardioCard key={type.id} type={type} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Custom section */}
-        {customTypes.length > 0 && (
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 mb-3">Custom</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {customTypes.map((type) => (
-                <CardioCard key={type.id} type={type} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* 1RM comparison bar chart */}
-        {oneRMData.length > 1 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>1RM Comparison</CardTitle>
-            </CardHeader>
-            <ResponsiveContainer width="100%" height={Math.max(200, oneRMData.length * 36)}>
-              <BarChart data={oneRMData} layout="vertical" margin={{ left: 80, right: 40, top: 4, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
-                <XAxis type="number" tick={{ fill: '#a1a1aa', fontSize: 11 }} />
-                <YAxis type="category" dataKey="name" tick={{ fill: '#e4e4e7', fontSize: 12 }} width={80} />
-                <Tooltip {...chartTooltipStyle} formatter={(v: unknown) => [`${v} lbs`, '1RM']} />
-                <Bar dataKey="value" fill="#3b82f6" radius={[0, 4, 4, 0]} label={{ position: 'right', fill: '#a1a1aa', fontSize: 11, formatter: (v: unknown) => `${v} lbs` }} />
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
-        )}
-      </div>
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* PR celebration toast */}
-      {justPR && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 bg-amber-500 text-black px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg animate-bounce">
-          🎉 New PR!
-        </div>
-      )}
-
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-2">
-          <Trophy className="h-5 w-5 text-amber-400" />
-          <h2 className="text-lg font-semibold text-white">Personal Records</h2>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Log / Results toggle */}
-          {!isReadOnly && view === 'grid' && milestoneTypes.length > 0 && (
-            <div className="flex rounded-lg border border-zinc-700 overflow-hidden text-sm">
-              <button
-                onClick={() => setMilestoneScreen('results')}
-                className={cn('px-3 py-2.5 transition-colors min-h-[44px]', milestoneScreen === 'results' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white')}
-              >
-                Results
-              </button>
-              <button
-                onClick={() => { setMilestoneScreen('log'); setEntryValue(''); }}
-                className={cn('px-3 py-2.5 transition-colors min-h-[44px]', milestoneScreen === 'log' ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white')}
-              >
-                <span className="flex items-center gap-1"><Plus className="h-3.5 w-3.5" />Log Entry</span>
-              </button>
-            </div>
-          )}
-          {!isReadOnly && view === 'grid' && milestoneScreen === 'results' && (
-            <button
-              onClick={() => { setEditMode(!editMode); setShowAddType(false); }}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm border transition-colors min-h-[44px]',
-                editMode
-                  ? 'bg-blue-600/20 border-blue-500/40 text-blue-400'
-                  : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white'
-              )}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              {editMode ? 'Done' : 'Edit'}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Empty state */}
-      {milestoneTypes.length === 0 && (
-        <Card>
-          <div className="text-center py-12 space-y-4">
-            <Trophy className="h-12 w-12 text-zinc-600 mx-auto" />
-            <p className="text-zinc-400">No milestones set up yet.</p>
-            {!isReadOnly && (
-              <button
-                onClick={seedDefaults}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
-              >
-                Load Defaults
-              </button>
-            )}
-          </div>
-        </Card>
-      )}
-
-      {/* Edit mode: add custom milestone form */}
-      {editMode && !isReadOnly && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Edit Milestones</CardTitle>
-          </CardHeader>
-          {!showAddType ? (
-            <button
-              onClick={() => setShowAddType(true)}
-              className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              Add Custom Milestone
-            </button>
-          ) : (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="text-xs text-zinc-400 block mb-1">Name</label>
-                  <input
-                    type="text"
-                    value={newTypeName}
-                    onChange={(e) => setNewTypeName(e.target.value)}
-                    placeholder="e.g. Box Jump"
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-zinc-400 block mb-1">Category</label>
-                  <select
-                    value={newTypeCategory}
-                    onChange={(e) => setNewTypeCategory(e.target.value as 'weightlifting' | 'cardio' | 'custom')}
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-white"
-                  >
-                    <option value="weightlifting">Weightlifting</option>
-                    <option value="cardio">Cardio</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs text-zinc-400 block mb-1">Unit</label>
-                  <select
-                    value={newTypeUnit}
-                    onChange={(e) => setNewTypeUnit(e.target.value as 'lbs' | 'seconds' | 'pace')}
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-white"
-                  >
-                    <option value="lbs">lbs</option>
-                    <option value="seconds">seconds</option>
-                    <option value="pace">pace (mm:ss)</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleAddType}
-                  disabled={!newTypeName.trim()}
-                  className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm font-medium transition-colors"
-                >
-                  <Save className="h-3.5 w-3.5" />
-                  Save
-                </button>
-                <button
-                  onClick={() => { setShowAddType(false); setNewTypeName(''); }}
-                  className="px-3 py-1.5 rounded text-sm text-zinc-400 hover:text-white border border-zinc-700 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-        </Card>
-      )}
-
-      {/* Main content */}
-      {milestoneTypes.length > 0 && (
-        view === 'detail'
-          ? renderDetailView()
-          : milestoneScreen === 'log' && !isReadOnly
-            ? renderLogScreen()
-            : renderGridView()
-      )}
-    </div>
-  );
-}
