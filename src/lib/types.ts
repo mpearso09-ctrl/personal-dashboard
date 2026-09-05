@@ -35,6 +35,12 @@ export interface FitnessDaily {
   mobility: boolean;
   weight_lbs: number | null;
   body_fat_pct: number | null;
+  visceral_fat_pct: number | null;
+  stretching: boolean;
+  evening_walk: boolean;
+  drinks_wine: number;
+  drinks_beer: number;
+  drinks_spirits: number;
   notes: string | null;
   created_at: string;
 }
@@ -68,6 +74,7 @@ export interface FitnessGoals {
   challenge_days: number;
   goal_weight: number;
   goal_body_fat: number;
+  goal_visceral_fat: number | null;
   updated_at: string;
 }
 
