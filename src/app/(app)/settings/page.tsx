@@ -26,6 +26,7 @@ const defaultGoals: Omit<FitnessGoals, 'id' | 'user_id' | 'updated_at'> = {
   challenge_days: 69,
   goal_weight: 170,
   goal_body_fat: 12,
+  goal_visceral_fat: 10,
 };
 
 export default function SettingsPage() {
@@ -239,10 +240,6 @@ export default function SettingsPage() {
           <Field label="Steps (min)" value={goals.steps_min} onChange={(v) => updateGoal('steps_min', v)} type="number" />
           <Field label="Sleep (min hours)" value={goals.sleep_min} onChange={(v) => updateGoal('sleep_min', v)} type="number" step="0.5" />
           <Field label="Calories Burned (min)" value={goals.calories_burned_min} onChange={(v) => updateGoal('calories_burned_min', v)} type="number" />
-          <Field label="Carbs Min (g)" value={goals.carbs_min} onChange={(v) => updateGoal('carbs_min', v)} type="number" />
-          <Field label="Carbs Max (g)" value={goals.carbs_max} onChange={(v) => updateGoal('carbs_max', v)} type="number" />
-          <Field label="Fat Min (g)" value={goals.fat_min} onChange={(v) => updateGoal('fat_min', v)} type="number" />
-          <Field label="Fat Max (g)" value={goals.fat_max} onChange={(v) => updateGoal('fat_max', v)} type="number" />
           <Field label="Fiber Min (g)" value={goals.fiber_min} onChange={(v) => updateGoal('fiber_min', v)} type="number" />
           <Field label="Fiber Max (g)" value={goals.fiber_max} onChange={(v) => updateGoal('fiber_max', v)} type="number" />
         </div>
@@ -255,6 +252,7 @@ export default function SettingsPage() {
         <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Goal Weight (lbs)" value={goals.goal_weight} onChange={(v) => updateGoal('goal_weight', v)} type="number" step="0.1" />
           <Field label="Goal Body Fat (%)" value={goals.goal_body_fat} onChange={(v) => updateGoal('goal_body_fat', v)} type="number" step="0.1" />
+          <Field label="Goal Visceral Fat (%)" value={goals.goal_visceral_fat ?? 10} onChange={(v) => updateGoal('goal_visceral_fat', v)} type="number" step="0.1" />
         </div>
       </Card>
 
