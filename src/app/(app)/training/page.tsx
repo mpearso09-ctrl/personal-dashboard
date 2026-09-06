@@ -1,2432 +1,388 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
-import {
-  PROGRAM,
-  type ProgramDay,
-  type ProgramExercise,
-  type TrainingWorkout,
-  type TrainingExercise,
-  type TrainingSet,
-  type TrainingProgramSettings,
-} from '@/lib/types';
-import { cn, formatDate, getToday } from '@/lib/utils';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn, formatDate, getToday } from '@/lib/utils';
+import { DEFAULT_GYM_EXERCISES } from '@/lib/types';
+import type { TrainingSession, SessionType, RunSubtype, GymExercise, MilestoneType, MilestoneEntry } from '@/lib/types';
 import {
-  Zap,
-  CheckCircle2,
-  Circle,
-  Play,
-  Square,
-  Timer,
-  ChevronRight,
-  ChevronLeft,
-  Trophy,
-  Flame,
-  RotateCcw,
-  Calendar,
-  Dumbbell,
+  Zap, Footprints, Dumbbell, Flame, Check, ChevronLeft, ChevronRight,
+  Trash2, Plus, Minus, Trophy, CalendarDays, X,
 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 // ---------------------------------------------------------------------------
-// Helper functions
+// Config
 // ---------------------------------------------------------------------------
 
-function getProgramDay(startDate: string, targetDate?: string): { week: number; day: number; totalDay: number } {
-  const start = new Date(startDate + 'T00:00:00');
-  const target = new Date((targetDate ?? getToday()) + 'T00:00:00');
-  const daysSinceStart = Math.floor((target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  if (daysSinceStart < 0) return { week: 1, day: 1, totalDay: 0 };
-  const totalDay = daysSinceStart + 1;
-  const weekIndex = Math.floor(daysSinceStart / 7) % 8;
-  const dayIndex = daysSinceStart % 7;
-  return { week: weekIndex + 1, day: dayIndex + 1, totalDay };
-}
+const TYPES: { key: SessionType; label: string; icon: typeof Zap; color: string; bg: string; hex: string }[] = [
+  { key: 'run', label: 'Run', icon: Footprints, color: 'text-sky-400', bg: 'bg-sky-500/15 border-sky-500/40', hex: '#38bdf8' },
+  { key: 'crossfit', label: 'CrossFit', icon: Flame, color: 'text-orange-400', bg: 'bg-orange-500/15 border-orange-500/40', hex: '#fb923c' },
+  { key: 'gym', label: 'Gym', icon: Dumbbell, color: 'text-violet-400', bg: 'bg-violet-500/15 border-violet-500/40', hex: '#a78bfa' },
+  { key: 'hyrox', label: 'HYROX', icon: Zap, color: 'text-yellow-400', bg: 'bg-yellow-500/15 border-yellow-500/40', hex: '#facc15' },
+];
+const typeOf = (k: SessionType) => TYPES.find((t) => t.key === k)!;
 
-function shiftDate(dateStr: string, days: number): string {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
+const RUN_SUBTYPES: { key: RunSubtype; label: string; hint: string }[] = [
+  { key: 'distance', label: 'Distance', hint: '5K · 10K · 15K' },
+  { key: 'vo2', label: 'VO2 Intervals', hint: '4 min @ 98% · 3 min walk × 4' },
+  { key: 'sprints', label: 'Sprints', hint: 'short all-out efforts' },
+];
 
-function roundToFive(n: number): number {
-  return Math.round(n / 5) * 5;
-}
+// milestone auto-PR matching for distance runs (±5%)
+const RUN_MILESTONES: { km: number; name: string }[] = [
+  { km: 1, name: '1KM Run' }, { km: 2, name: '2KM Run' }, { km: 5, name: '5K Run' },
+  { km: 10, name: '10KM Run' }, { km: 21.1, name: '21KM Half Marathon' },
+];
 
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
+const LIFT_COLORS = ['#a78bfa', '#38bdf8', '#fb923c', '#facc15', '#34d399', '#f472b6'];
 
-function parseTime(str: string): number {
-  const parts = str.split(':').map(Number);
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  return parseInt(str) || 0;
-}
+const freshGym = (): GymExercise[] => DEFAULT_GYM_EXERCISES.map((e) => ({ name: e.name, target_sets: 4, target_reps: 12, weight: null, done: [false, false, false, false] }));
 
-function getDurationStr(exercise: ProgramExercise): string {
-  if (exercise.durationMin && exercise.durationMinMax) {
-    return `${exercise.durationMin}–${exercise.durationMinMax} min`;
+function shiftDate(date: string, days: number) { const d = new Date(date + 'T00:00:00'); d.setDate(d.getDate() + days); return d.toISOString().split('T')[0]; }
+function mondayOf(date: string) { const d = new Date(date + 'T00:00:00'); const dow = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dow); return d.toISOString().split('T')[0]; }
+function fmtTime(min: number | null) { if (min == null) return '—'; const s = Math.round(min * 60); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`; }
+function parseTime(v: string): number | null { if (!v.trim()) return null; const p = v.split(':').map(Number); if (p.some(isNaN)) return null; if (p.length === 1) return p[0]; if (p.length === 2) return p[0] + p[1] / 60; return p[0] * 60 + p[1] + p[2] / 60; }
+function pace(min: number | null, km: number | null) { if (!min || !km) return null; return min / km; }
+function fmtPace(p: number | null) { if (p == null) return '—'; const m = Math.floor(p), s = Math.round((p - m) * 60); return `${m}:${String(s).padStart(2, '0')}/km`; }
+function shortDate(d: string) { return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+function shortDay(d: string) { return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' }); }
+
+/** one-line summary of a session */
+function summary(s: TrainingSession): string {
+  if (s.type === 'run') {
+    if (s.subtype === 'vo2') return `${s.rounds ?? 4} × ${Math.round((s.work_sec ?? 240) / 60)}/${Math.round((s.rest_sec ?? 180) / 60)} min${s.avg_hr ? ` · ${s.avg_hr} bpm` : ''}`;
+    if (s.subtype === 'sprints') return `${s.rounds ?? '—'} sprints${s.distance_km ? ` · ${s.distance_km} km` : ''}`;
+    return `${s.distance_km ?? '—'} km · ${fmtTime(s.duration_min)} · ${fmtPace(pace(s.duration_min, s.distance_km))}`;
   }
-  if (exercise.durationMin) return `${exercise.durationMin} min`;
-  return '';
+  if (s.type === 'gym') { const ex = s.exercises ?? []; const done = ex.reduce((a, e) => a + e.done.filter(Boolean).length, 0); const tot = ex.reduce((a, e) => a + e.target_sets, 0); return `${done}/${tot} sets`; }
+  return `${s.duration_min ? fmtTime(s.duration_min) : '—'}${s.rpe ? ` · RPE ${s.rpe}` : ''}${s.subtype === 'hyrox_class' ? ' · HYROX class' : ''}`;
 }
 
 // ---------------------------------------------------------------------------
-// Types for local workout state
+// Page
 // ---------------------------------------------------------------------------
 
-interface LocalSet {
-  setNumber: number;
-  targetReps: number | 'max' | null;
-  targetWeight: number | null;
-  actualWeight: string;
-  actualReps: string;
-  timeSeconds: string; // mm:ss for cardio/intervals
-  isCompleted: boolean;
-  dbId: string | null;
-}
-
-interface LocalExercise {
-  programExercise: ProgramExercise;
-  exerciseOrder: number;
-  sets: LocalSet[];
-  // For AMRAP
-  amrapRounds: string;
-  amrapNotes: string;
-  amrapTimerRunning: boolean;
-  amrapSecondsLeft: number;
-  // For circuits
-  circuitRounds: number;
-  circuitTime: string;
-  circuitNotes: string;
-  // For optional (day 6) — which option selected
-  optionSelected: 'A' | 'B' | null;
-  // Cardio
-  cardioTimeStr: string;
-  cardioTimerRunning: boolean;
-  cardioElapsedSeconds: number;
-  isCompleted: boolean;
-  dbId: string | null;
-}
-
-// ---------------------------------------------------------------------------
-// Tab type
-// ---------------------------------------------------------------------------
-
-type TabKey = 'today' | 'program' | 'history';
-
-// ---------------------------------------------------------------------------
-// Main page
-// ---------------------------------------------------------------------------
+type Draft = Omit<TrainingSession, 'id' | 'user_id' | 'created_at'>;
+const emptyDraft = (date: string, type: SessionType): Draft => ({
+  date, type, subtype: type === 'run' ? 'distance' : type === 'crossfit' ? 'class' : null,
+  duration_min: null, distance_km: null, avg_hr: null, max_hr: null, rpe: null,
+  rounds: type === 'run' ? 4 : null, work_sec: 240, rest_sec: 180,
+  exercises: type === 'gym' ? freshGym() : null, notes: null,
+});
 
 export default function TrainingPage() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading } = useAuth();
   const supabase = createClient();
+  const [sessions, setSessions] = useState<TrainingSession[]>([]);
+  const [date, setDate] = useState(getToday());
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [timeText, setTimeText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<TabKey>('today');
-
-  // Program settings
-  const [settings, setSettings] = useState<TrainingProgramSettings | null>(null);
-  const [settingsLoading, setSettingsLoading] = useState(true);
-  const [startDateInput, setStartDateInput] = useState(getToday());
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [editingStartDate, setEditingStartDate] = useState(false);
-  const [newStartDateInput, setNewStartDateInput] = useState('');
-
-  // Date navigation — which day we're viewing/logging
-  const [selectedTrainingDate, setSelectedTrainingDate] = useState(getToday());
-
-  // Calendar month for Program tab (YYYY-MM)
-  const [calendarMonth, setCalendarMonth] = useState<string>(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
-
-  // Today's workout DB state
-  const [todayWorkout, setTodayWorkout] = useState<TrainingWorkout | null>(null);
-  const [workoutLoading, setWorkoutLoading] = useState(false);
-
-  // Local interactive workout state
-  const [workoutStarted, setWorkoutStarted] = useState(false);
-  const [exercises, setExercises] = useState<LocalExercise[]>([]);
-  const [completingWorkout, setCompletingWorkout] = useState(false);
-
-  // Completed workout detail for read-only view (past/completed days)
-  // null = not yet fetched, [] = fetched but no exercise data saved
-  const [completedWorkoutDetail, setCompletedWorkoutDetail] = useState<
-    (TrainingExercise & { sets: TrainingSet[] })[] | null
-  >(null);
-
-  // Save indicator
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-
-  // 1RM cache: milestoneMatch -> best 1RM value
-  const [oneRMCache, setOneRMCache] = useState<Record<string, number>>({});
-
-  // PR toast
-  const [prToasts, setPrToasts] = useState<string[]>([]);
-
-  // History
-  const [historyWorkouts, setHistoryWorkouts] = useState<TrainingWorkout[]>([]);
-  const [historyDetail, setHistoryDetail] = useState<{
-    workout: TrainingWorkout;
-    exercises: (TrainingExercise & { sets: TrainingSet[] })[];
-  } | null>(null);
-
-  // Debounce refs
-  const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-
-  // Swipe gesture refs (for date navigation on Today tab)
-  const swipeTouchStart = useRef<{ x: number; y: number } | null>(null);
-
-  // ---------------------------------------------------------------------------
-  // Wake lock
-  // ---------------------------------------------------------------------------
-
-  useEffect(() => {
-    let wakeLock: WakeLockSentinel | null = null;
-    async function acquireWakeLock() {
-      try {
-        if ('wakeLock' in navigator) {
-          wakeLock = await navigator.wakeLock.request('screen');
-        }
-      } catch { /* ignore */ }
-    }
-    if (workoutStarted) acquireWakeLock();
-    return () => { wakeLock?.release().catch(() => {}); };
-  }, [workoutStarted]);
-
-  // ---------------------------------------------------------------------------
-  // Interval timers (AMRAP countdown + cardio elapsed)
-  // ---------------------------------------------------------------------------
-
-  useEffect(() => {
-    if (!workoutStarted) return;
-    const interval = setInterval(() => {
-      setExercises((prev) =>
-        prev.map((ex) => {
-          let updated = { ...ex };
-
-          // AMRAP countdown
-          if (ex.amrapTimerRunning && ex.amrapSecondsLeft > 0) {
-            updated = { ...updated, amrapSecondsLeft: ex.amrapSecondsLeft - 1 };
-            if (updated.amrapSecondsLeft === 0) {
-              updated = { ...updated, amrapTimerRunning: false };
-            }
-          }
-
-          // Cardio elapsed timer
-          if (ex.cardioTimerRunning) {
-            updated = { ...updated, cardioElapsedSeconds: ex.cardioElapsedSeconds + 1 };
-          }
-
-          return updated;
-        })
-      );
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [workoutStarted]);
-
-  // ---------------------------------------------------------------------------
-  // Data loading
-  // ---------------------------------------------------------------------------
-
-  const fetchSettings = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from('training_program_settings')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('is_active', true)
-      .single();
-    setSettings(data ?? null);
-    setSettingsLoading(false);
+    const { data } = await supabase.from('training_sessions').select('*').eq('user_id', user.id)
+      .gte('date', shiftDate(getToday(), -180)).order('date', { ascending: false }).order('created_at', { ascending: false });
+    setSessions((data as TrainingSession[]) ?? []);
   }, [user]);
+  useEffect(() => { load(); }, [load]);
 
-  const fetchTodayWorkout = useCallback(async () => {
-    if (!user || !settings) return;
-    setWorkoutLoading(true);
-    const { data } = await supabase
-      .from('training_workouts')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('date', selectedTrainingDate)
-      .single();
-    setTodayWorkout(data ?? null);
-    setWorkoutLoading(false);
-  }, [user, settings, selectedTrainingDate]);
-
-  const fetch1RMs = useCallback(async (programDay: ProgramDay) => {
-    if (!user) return;
-    const names = programDay.exercises
-      .filter((e) => e.milestoneMatch)
-      .map((e) => e.milestoneMatch!);
-    if (!names.length) return;
-
-    // Get milestone_type IDs for these names
-    const { data: types } = await supabase
-      .from('milestone_types')
-      .select('id, name')
-      .eq('user_id', user.id)
-      .in('name', names);
-
-    if (!types?.length) return;
-
-    const typeMap: Record<string, string> = {};
-    types.forEach((t) => { typeMap[t.name] = t.id; });
-
-    // Get best 1RM entries
-    const typeIds = types.map((t) => t.id);
-    const { data: entries } = await supabase
-      .from('milestone_entries')
-      .select('milestone_type_id, value')
-      .in('milestone_type_id', typeIds)
-      .eq('rep_max', 1)
-      .order('value', { ascending: false });
-
-    if (!entries?.length) return;
-
-    const cache: Record<string, number> = {};
-    names.forEach((name) => {
-      const tid = typeMap[name];
-      if (!tid) return;
-      const best = entries.filter((e) => e.milestone_type_id === tid)[0];
-      if (best) cache[name] = best.value;
-    });
-    setOneRMCache(cache);
-  }, [user]);
-
-  const fetchHistory = useCallback(async () => {
-    if (!user) return;
-    const { data } = await supabase
-      .from('training_workouts')
-      .select('*')
-      .eq('user_id', user.id)
-      .not('completed_at', 'is', null)
-      .order('date', { ascending: false })
-      .limit(30);
-    setHistoryWorkouts(data ?? []);
-  }, [user]);
-
-  // ---------------------------------------------------------------------------
-  // Fetch all exercises + sets for a workout (used for restore & read-only view)
-  // ---------------------------------------------------------------------------
-
-  const fetchWorkoutDetail = useCallback(async (
-    workoutId: string
-  ): Promise<(TrainingExercise & { sets: TrainingSet[] })[]> => {
-    const { data: exData } = await supabase
-      .from('training_exercises')
-      .select('*')
-      .eq('workout_id', workoutId)
-      .order('exercise_order');
-    if (!exData?.length) return [];
-    return Promise.all(
-      exData.map(async (ex) => {
-        const { data: sets } = await supabase
-          .from('training_sets')
-          .select('*')
-          .eq('exercise_id', ex.id)
-          .order('set_number');
-        return { ...ex, sets: sets ?? [] };
-      })
-    );
-  }, [supabase]);
-
-  // ---------------------------------------------------------------------------
-  // Restore LocalExercise[] from DB data (re-entering an in-progress workout)
-  // ---------------------------------------------------------------------------
-
-  function restoreExercisesFromDB(
-    dbExercises: (TrainingExercise & { sets: TrainingSet[] })[],
-    programDay: ProgramDay,
-    week: number,
-    orCache: Record<string, number>
-  ): LocalExercise[] {
-    const base = buildExercises(programDay, week, orCache);
-    return base.map((baseEx, idx) => {
-      const dbEx = dbExercises.find((e) => e.exercise_order === idx);
-      if (!dbEx) return baseEx;
-
-      const type = baseEx.programExercise.type;
-      const restoredSets = baseEx.sets.map((baseSet) => {
-        const dbSet = dbEx.sets.find((s) => s.set_number === baseSet.setNumber);
-        if (!dbSet) return baseSet;
-        return {
-          ...baseSet,
-          dbId: dbSet.id,
-          actualWeight: dbSet.actual_weight != null ? String(dbSet.actual_weight) : '',
-          actualReps: dbSet.actual_reps != null ? String(dbSet.actual_reps) : '',
-          timeSeconds: dbSet.time_seconds != null ? formatTime(dbSet.time_seconds) : '',
-          isCompleted: dbSet.is_completed ?? false,
-        };
-      });
-
-      // For AMRAP / circuit / cardio restore from summary set (set_number=1)
-      const summarySet = dbEx.sets.find((s) => s.set_number === 1);
-      let extra: Partial<LocalExercise> = {};
-      if (type === 'amrap' && summarySet) {
-        extra = {
-          amrapRounds: summarySet.actual_reps != null ? String(summarySet.actual_reps) : '',
-          amrapNotes: summarySet.notes ?? '',
-          isCompleted: summarySet.is_completed ?? false,
-        };
-      } else if (type === 'circuit' && summarySet) {
-        extra = {
-          circuitRounds: summarySet.actual_reps ?? 0,
-          circuitTime: summarySet.time_seconds != null ? formatTime(summarySet.time_seconds) : '',
-          circuitNotes: summarySet.notes ?? '',
-          isCompleted: summarySet.is_completed ?? false,
-        };
-      } else if (type === 'cardio' && summarySet) {
-        extra = {
-          cardioElapsedSeconds: summarySet.time_seconds ?? 0,
-          cardioTimeStr: summarySet.time_seconds != null ? formatTime(summarySet.time_seconds) : '',
-          isCompleted: summarySet.is_completed ?? false,
-        };
-      }
-
-      return { ...baseEx, dbId: dbEx.id, sets: restoredSets, ...extra };
-    });
-  }
-
-  useEffect(() => {
-    if (!user) return;
-    fetchSettings();
-  }, [user, fetchSettings]);
-
-  useEffect(() => {
-    if (!user || !settings) return;
-    setWorkoutStarted(false);
-    setExercises([]);
-    setCompletedWorkoutDetail(null);
-    setLastSavedAt(null);
-    fetchTodayWorkout();
-  }, [user, settings, fetchTodayWorkout, selectedTrainingDate]);
-
-  // When todayWorkout row arrives: restore in-progress OR load completed detail
-  useEffect(() => {
-    if (!user || !settings || !todayWorkout) return;
-    const { week, day } = getProgramDay(settings.start_date, todayWorkout.date);
-    const programDay = PROGRAM[(day - 1) % 7];
-
-    if (todayWorkout.started_at && !todayWorkout.completed_at) {
-      // In-progress — restore exercise state so the user picks up where they left off
-      (async () => {
-        const orCache = await buildOneRMCache(programDay);
-        const dbExercises = await fetchWorkoutDetail(todayWorkout.id);
-        if (dbExercises.length > 0) {
-          const restored = restoreExercisesFromDB(dbExercises, programDay, week, orCache);
-          setExercises(restored);
-          setWorkoutStarted(true);
-        }
-      })();
-    } else if (todayWorkout.completed_at) {
-      // Completed — load detail for read-only view
-      fetchWorkoutDetail(todayWorkout.id).then(setCompletedWorkoutDetail);
+  // ------------------------------------------------------------------ start
+  const start = (type: SessionType) => {
+    const d = emptyDraft(date, type);
+    if (type === 'gym') {
+      // prefill last weights
+      const last = sessions.find((s) => s.type === 'gym' && s.exercises);
+      if (last?.exercises) d.exercises = d.exercises!.map((e) => ({ ...e, weight: last.exercises!.find((x) => x.name === e.name)?.weight ?? null }));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayWorkout?.id]);
+    setDraft(d); setTimeText('');
+  };
 
-  useEffect(() => {
-    if (!user || !settings) return;
-    if (activeTab === 'history') fetchHistory();
-  }, [user, settings, activeTab, fetchHistory]);
-
-  // ---------------------------------------------------------------------------
-  // Build local exercise state from program day
-  // ---------------------------------------------------------------------------
-
-  function buildExercises(programDay: ProgramDay, week: number, orCache: Record<string, number>): LocalExercise[] {
-    const isPhase2 = week >= 5;
-    return programDay.exercises.map((ex, idx) => {
-      const sets = getSetsForPhase(ex, isPhase2, orCache);
-      return {
-        programExercise: ex,
-        exerciseOrder: idx,
-        sets,
-        amrapRounds: '',
-        amrapNotes: '',
-        amrapTimerRunning: false,
-        amrapSecondsLeft: (ex.amrapMinutes ?? 10) * 60,
-        circuitRounds: 0,
-        circuitTime: '',
-        circuitNotes: '',
-        optionSelected: null,
-        cardioTimeStr: '',
-        cardioTimerRunning: false,
-        cardioElapsedSeconds: 0,
-        isCompleted: false,
-        dbId: null,
-      };
-    });
-  }
-
-  function getSetsForPhase(ex: ProgramExercise, isPhase2: boolean, orCache: Record<string, number>): LocalSet[] {
-    const rawSets = isPhase2 ? (ex.phase2Sets ?? ex.sets ?? []) : (ex.phase1Sets ?? ex.sets ?? []);
-
-    if (ex.type === 'intervals') {
-      const minRounds = ex.intervalRounds?.[0] ?? 6;
-      return Array.from({ length: minRounds }, (_, i) => ({
-        setNumber: i + 1,
-        targetReps: null,
-        targetWeight: null,
-        actualWeight: '',
-        actualReps: '',
-        timeSeconds: '',
-        isCompleted: false,
-        dbId: null,
-      }));
+  // ------------------------------------------------------------------ save
+  const save = async () => {
+    if (!user || !draft) return;
+    setSaving(true);
+    const payload = { ...draft, user_id: user.id, duration_min: draft.duration_min ?? parseTime(timeText) };
+    const { error } = await supabase.from('training_sessions').insert(payload);
+    if (error) { setSaving(false); setToast('Save failed'); setTimeout(() => setToast(null), 2500); return; }
+    // mark the day's workout toggle
+    const { data: fd } = await supabase.from('fitness_daily').select('id').eq('user_id', user.id).eq('date', draft.date).maybeSingle();
+    if (fd) await supabase.from('fitness_daily').update({ workout: true }).eq('id', fd.id);
+    else await supabase.from('fitness_daily').insert({ user_id: user.id, date: draft.date, workout: true });
+    // auto-PR for distance runs
+    let pr = false;
+    if (draft.type === 'run' && draft.subtype === 'distance' && payload.duration_min && draft.distance_km) {
+      const m = RUN_MILESTONES.find((r) => Math.abs(r.km - draft.distance_km!) / r.km <= 0.05);
+      if (m) pr = await logRunMilestone(m.name, Math.round(payload.duration_min * 60), draft.date);
     }
+    setSaving(false); setDraft(null);
+    setToast(pr ? '🎉 New PR logged!' : 'Session saved');
+    setTimeout(() => setToast(null), 2500);
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pr ? [30, 60, 30] : 15);
+    load();
+  };
 
-    if (!rawSets.length) return [];
+  const logRunMilestone = async (name: string, seconds: number, d: string): Promise<boolean> => {
+    if (!user) return false;
+    const { data: type } = await supabase.from('milestone_types').select('*').eq('user_id', user.id).eq('name', name).maybeSingle();
+    if (!type) return false;
+    const { data: prev } = await supabase.from('milestone_entries').select('value').eq('milestone_type_id', (type as MilestoneType).id).order('value').limit(1);
+    const isPr = !prev?.length || seconds < (prev[0] as MilestoneEntry).value;
+    await supabase.from('milestone_entries').insert({ user_id: user.id, milestone_type_id: (type as MilestoneType).id, rep_max: null, value: seconds, date: d, notes: 'Auto-logged from Training', is_pr: isPr });
+    return isPr;
+  };
 
-    return rawSets.map((s, i) => {
-      let targetWeight: number | null = null;
-      if (s.pctOf1RM && ex.milestoneMatch && orCache[ex.milestoneMatch]) {
-        targetWeight = roundToFive(orCache[ex.milestoneMatch] * s.pctOf1RM);
-      }
-      return {
-        setNumber: i + 1,
-        targetReps: s.targetReps ?? null,
-        targetWeight,
-        actualWeight: '',
-        actualReps: '',
-        timeSeconds: '',
-        isCompleted: false,
-        dbId: null,
-      };
-    });
-  }
+  const remove = async (id: string) => {
+    if (!confirm('Delete this session?')) return;
+    await supabase.from('training_sessions').delete().eq('id', id);
+    load();
+  };
 
-  // ---------------------------------------------------------------------------
-  // Start workout
-  // ---------------------------------------------------------------------------
+  // ------------------------------------------------------------------ derived
+  const weekStart = mondayOf(getToday());
+  const thisWeek = useMemo(() => sessions.filter((s) => s.date >= weekStart), [sessions, weekStart]);
+  const weekDays = Array.from({ length: 7 }, (_, i) => shiftDate(weekStart, i));
+  const monthKey = getToday().slice(0, 7);
+  const thisMonth = useMemo(() => sessions.filter((s) => s.date.startsWith(monthKey)), [sessions, monthKey]);
+  const countBy = (rows: TrainingSession[], t: SessionType) => rows.filter((s) => s.type === t).length;
+  const runKm = (rows: TrainingSession[]) => rows.filter((s) => s.type === 'run').reduce((a, s) => a + (s.distance_km ?? 0), 0);
 
-  async function startWorkout() {
-    if (!user || !settings) return;
-    const { week, day } = getProgramDay(settings.start_date, selectedTrainingDate);
-    const programDay = PROGRAM[(day - 1) % 7];
+  const paceTrend = useMemo(() => sessions.filter((s) => s.type === 'run' && s.subtype === 'distance' && s.duration_min && s.distance_km)
+    .map((s) => ({ date: s.date, pace: +(pace(s.duration_min, s.distance_km)!).toFixed(2), km: s.distance_km })).reverse(), [sessions]);
+  const liftTrend = useMemo(() => {
+    const rows = sessions.filter((s) => s.type === 'gym' && s.exercises).reverse();
+    return rows.map((s) => { const o: Record<string, string | number | null> = { date: s.date }; s.exercises!.forEach((e) => { o[e.name] = e.weight; }); return o; });
+  }, [sessions]);
+  const weeklyVolume = useMemo(() => {
+    const m = new Map<string, Record<SessionType, number>>();
+    sessions.forEach((s) => { const k = mondayOf(s.date); const w = m.get(k) ?? { run: 0, crossfit: 0, gym: 0, hyrox: 0 }; w[s.type]++; m.set(k, w); });
+    return [...m.entries()].sort().slice(-8).map(([k, w]) => ({ week: shortDate(k), ...w }));
+  }, [sessions]);
+  const dateSessions = sessions.filter((s) => s.date === date);
 
-    await fetch1RMs(programDay);
-    const orCache = await buildOneRMCache(programDay);
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" /></div>;
+  if (!user) return <p className="text-zinc-400 p-8">Please sign in.</p>;
 
-    let workout = todayWorkout;
+  const tip = { backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 8, fontSize: 12 };
+  const axis = { stroke: '#52525b', fontSize: 11 };
+  const Num = ({ label, value, onChange, unit, step = '1', mode = 'decimal' as 'decimal' | 'numeric' }: { label: string; value: number | null; onChange: (v: number | null) => void; unit?: string; step?: string; mode?: 'decimal' | 'numeric' }) => (
+    <label className="bg-zinc-800/60 rounded-xl p-3 block">
+      <span className="text-xs text-zinc-400">{label}</span>
+      <div className="flex items-baseline gap-1"><input type="number" inputMode={mode} step={step} value={value ?? ''} placeholder="—" onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))} className="w-full bg-transparent text-2xl font-semibold text-white tabular-nums outline-none placeholder:text-zinc-600" />{unit && <span className="text-zinc-500 text-sm">{unit}</span>}</div>
+    </label>
+  );
+  const Rpe = () => draft && (
+    <div className="bg-zinc-800/60 rounded-xl p-3"><span className="text-xs text-zinc-400">Effort (RPE)</span>
+      <div className="grid grid-cols-10 gap-1 mt-2">{Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+        <button key={n} onClick={() => setDraft({ ...draft, rpe: draft.rpe === n ? null : n })} className={cn('h-10 rounded-lg text-sm font-medium', draft.rpe === n ? (n >= 8 ? 'bg-red-500 text-white' : n >= 5 ? 'bg-amber-500 text-black' : 'bg-emerald-500 text-black') : 'bg-zinc-900 text-zinc-400')}>{n}</button>))}</div>
+    </div>
+  );
 
-    if (!workout) {
-      const { data } = await supabase
-        .from('training_workouts')
-        .upsert({
-          user_id: user.id,
-          date: selectedTrainingDate,
-          week_number: week,
-          day_number: day,
-          day_name: programDay.name,
-          started_at: new Date().toISOString(),
-        }, { onConflict: 'user_id,date' })
-        .select()
-        .single();
-      workout = data;
-      setTodayWorkout(data);
-    }
-
-    const exs = buildExercises(programDay, week, orCache);
-    setExercises(exs);
-    setWorkoutStarted(true);
-  }
-
-  async function buildOneRMCache(programDay: ProgramDay): Promise<Record<string, number>> {
-    if (!user) return {};
-    const names = programDay.exercises
-      .filter((e) => e.milestoneMatch)
-      .map((e) => e.milestoneMatch!);
-    if (!names.length) return {};
-
-    const { data: types } = await supabase
-      .from('milestone_types')
-      .select('id, name')
-      .eq('user_id', user.id)
-      .in('name', names);
-
-    if (!types?.length) return {};
-
-    const typeMap: Record<string, string> = {};
-    types.forEach((t) => { typeMap[t.name] = t.id; });
-
-    const typeIds = types.map((t) => t.id);
-    const { data: entries } = await supabase
-      .from('milestone_entries')
-      .select('milestone_type_id, value')
-      .in('milestone_type_id', typeIds)
-      .eq('rep_max', 1)
-      .order('value', { ascending: false });
-
-    const cache: Record<string, number> = {};
-    names.forEach((name) => {
-      const tid = typeMap[name];
-      if (!tid) return;
-      const best = (entries ?? []).filter((e) => e.milestone_type_id === tid)[0];
-      if (best) cache[name] = best.value;
-    });
-    setOneRMCache(cache);
-    return cache;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Auto-save helpers
-  // ---------------------------------------------------------------------------
-
-  function scheduleExerciseSave(exIdx: number, updatedExercises: LocalExercise[]) {
-    const key = `ex-${exIdx}`;
-    clearTimeout(saveTimers.current[key]);
-    saveTimers.current[key] = setTimeout(() => {
-      persistExercise(exIdx, updatedExercises);
-    }, 500);
-  }
-
-  async function ensureWorkoutRow(): Promise<string | null> {
-    if (!user || !settings) return null;
-    if (todayWorkout?.id) return todayWorkout.id;
-
-    const { week, day } = getProgramDay(settings.start_date, selectedTrainingDate);
-    const programDay = PROGRAM[(day - 1) % 7];
-
-    const { data } = await supabase
-      .from('training_workouts')
-      .upsert({
-        user_id: user.id,
-        date: selectedTrainingDate,
-        week_number: week,
-        day_number: day,
-        day_name: programDay.name,
-        started_at: new Date().toISOString(),
-      }, { onConflict: 'user_id,date' })
-      .select()
-      .single();
-    if (data) setTodayWorkout(data);
-    return data?.id ?? null;
-  }
-
-  async function persistExercise(exIdx: number, currentExercises: LocalExercise[]) {
-    if (!user) return;
-    const ex = currentExercises[exIdx];
-    if (!ex) return;
-
-    setIsSaving(true);
-    const workoutId = await ensureWorkoutRow();
-    if (!workoutId) { setIsSaving(false); return; }
-
-    // Upsert exercise row
-    let exDbId = ex.dbId;
-    if (!exDbId) {
-      const { data } = await supabase
-        .from('training_exercises')
-        .upsert({
-          workout_id: workoutId,
-          exercise_name: ex.programExercise.name,
-          exercise_order: ex.exerciseOrder,
-          exercise_type: ex.programExercise.type,
-        }, { onConflict: 'workout_id,exercise_order' })
-        .select()
-        .single();
-      exDbId = data?.id ?? null;
-      if (exDbId) {
-        const id = exDbId;
-        setExercises((prev) => {
-          const updated = [...prev];
-          updated[exIdx] = { ...updated[exIdx], dbId: id };
-          return updated;
-        });
-      }
-    }
-
-    if (!exDbId) { setIsSaving(false); return; }
-
-    const type = ex.programExercise.type;
-
-    if (type === 'strength' || type === 'intervals') {
-      // Save individual sets
-      for (const set of ex.sets) {
-        const payload = {
-          exercise_id: exDbId,
-          set_number: set.setNumber,
-          target_reps: typeof set.targetReps === 'number' ? set.targetReps : null,
-          actual_reps: set.actualReps ? parseInt(set.actualReps) : null,
-          target_weight: set.targetWeight,
-          actual_weight: set.actualWeight ? parseFloat(set.actualWeight) : null,
-          time_seconds: set.timeSeconds ? parseTime(set.timeSeconds) : null,
-          is_completed: set.isCompleted,
-          notes: null,
-        };
-        if (set.dbId) {
-          await supabase.from('training_sets').update(payload).eq('id', set.dbId);
-        } else {
-          const { data } = await supabase
-            .from('training_sets')
-            .upsert(payload, { onConflict: 'exercise_id,set_number' })
-            .select()
-            .single();
-          if (data?.id) {
-            const setDbId = data.id;
-            const sn = set.setNumber;
-            setExercises((prev) => {
-              const updated = [...prev];
-              const exCopy = { ...updated[exIdx] };
-              exCopy.sets = exCopy.sets.map((s) =>
-                s.setNumber === sn ? { ...s, dbId: setDbId } : s
-              );
-              updated[exIdx] = exCopy;
-              return updated;
-            });
-          }
-        }
-      }
-    } else if (type === 'amrap') {
-      // Save as a single summary set
-      await supabase.from('training_sets').upsert({
-        exercise_id: exDbId,
-        set_number: 1,
-        actual_reps: ex.amrapRounds ? parseInt(ex.amrapRounds) : null,
-        is_completed: ex.isCompleted,
-        notes: ex.amrapNotes || null,
-      }, { onConflict: 'exercise_id,set_number' });
-    } else if (type === 'circuit') {
-      await supabase.from('training_sets').upsert({
-        exercise_id: exDbId,
-        set_number: 1,
-        actual_reps: ex.circuitRounds || null,
-        time_seconds: ex.circuitTime ? parseTime(ex.circuitTime) : null,
-        is_completed: ex.isCompleted,
-        notes: ex.circuitNotes || null,
-      }, { onConflict: 'exercise_id,set_number' });
-    } else if (type === 'cardio' || type === 'optional') {
-      await supabase.from('training_sets').upsert({
-        exercise_id: exDbId,
-        set_number: 1,
-        time_seconds: ex.cardioElapsedSeconds > 0
-          ? ex.cardioElapsedSeconds
-          : ex.cardioTimeStr ? parseTime(ex.cardioTimeStr) : null,
-        is_completed: ex.isCompleted,
-      }, { onConflict: 'exercise_id,set_number' });
-    }
-
-    setIsSaving(false);
-    setLastSavedAt(new Date());
-  }
-
-  // ---------------------------------------------------------------------------
-  // Update helpers
-  // ---------------------------------------------------------------------------
-
-  function updateSet(exIdx: number, setIdx: number, changes: Partial<LocalSet>) {
-    setExercises((prev) => {
-      const updated = [...prev];
-      const exCopy = { ...updated[exIdx] };
-      const sets = [...exCopy.sets];
-      sets[setIdx] = { ...sets[setIdx], ...changes };
-      exCopy.sets = sets;
-      updated[exIdx] = exCopy;
-      scheduleExerciseSave(exIdx, updated);
-      return updated;
-    });
-  }
-
-  function updateExercise(exIdx: number, changes: Partial<LocalExercise>) {
-    setExercises((prev) => {
-      const updated = [...prev];
-      updated[exIdx] = { ...updated[exIdx], ...changes };
-      scheduleExerciseSave(exIdx, updated);
-      return updated;
-    });
-  }
-
-  function toggleSetComplete(exIdx: number, setIdx: number) {
-    // Haptic feedback on mobile
-    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
-    setExercises((prev) => {
-      const updated = [...prev];
-      const exCopy = { ...updated[exIdx] };
-      const sets = [...exCopy.sets];
-      sets[setIdx] = { ...sets[setIdx], isCompleted: !sets[setIdx].isCompleted };
-      exCopy.sets = sets;
-      updated[exIdx] = exCopy;
-      // Cancel debounced save and persist immediately on checkmark tap
-      clearTimeout(saveTimers.current[`ex-${exIdx}`]);
-      persistExercise(exIdx, updated);
-      return updated;
-    });
-  }
-
-  function toggleExerciseComplete(exIdx: number) {
-    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
-    setExercises((prev) => {
-      const updated = [...prev];
-      updated[exIdx] = { ...updated[exIdx], isCompleted: !updated[exIdx].isCompleted };
-      clearTimeout(saveTimers.current[`ex-${exIdx}`]);
-      persistExercise(exIdx, updated);
-      return updated;
-    });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Complete workout + PR detection
-  // ---------------------------------------------------------------------------
-
-  async function completeWorkout() {
-    if (!user || !todayWorkout) return;
-    setCompletingWorkout(true);
-
-    // Mark completed
-    await supabase
-      .from('training_workouts')
-      .update({ completed_at: new Date().toISOString() })
-      .eq('id', todayWorkout.id);
-
-    // PR detection
-    const newPRs: string[] = [];
-    for (const ex of exercises) {
-      if (!ex.programExercise.milestoneMatch) continue;
-      const name = ex.programExercise.milestoneMatch;
-
-      // Get milestone type
-      const { data: types } = await supabase
-        .from('milestone_types')
-        .select('id, unit')
-        .eq('user_id', user.id)
-        .eq('name', name)
-        .single();
-      if (!types) continue;
-
-      for (const set of ex.sets) {
-        if (!set.actualWeight || !set.actualReps) continue;
-        const w = parseFloat(set.actualWeight);
-        const r = parseInt(set.actualReps);
-        if (isNaN(w) || isNaN(r)) continue;
-
-        // Check rep_max = r
-        const { data: best } = await supabase
-          .from('milestone_entries')
-          .select('value')
-          .eq('user_id', user.id)
-          .eq('milestone_type_id', types.id)
-          .eq('rep_max', r <= 10 ? r : null)
-          .order('value', { ascending: false })
-          .limit(1)
-          .single();
-
-        const isNewPR = !best || w > best.value;
-        if (isNewPR) {
-          await supabase.from('milestone_entries').insert({
-            user_id: user.id,
-            milestone_type_id: types.id,
-            rep_max: r <= 10 ? r : null,
-            value: w,
-            date: selectedTrainingDate,
-            is_pr: true,
-          });
-          newPRs.push(`${name} ${r}RM: ${w} lbs`);
-        }
-      }
-    }
-
-    if (newPRs.length) setPrToasts(newPRs);
-    await fetchTodayWorkout();
-    setWorkoutStarted(false);
-    setCompletingWorkout(false);
-
-    if (newPRs.length) {
-      setTimeout(() => setPrToasts([]), 5000);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Save settings
-  // ---------------------------------------------------------------------------
-
-  async function saveSettings() {
-    if (!user) return;
-    setSavingSettings(true);
-    const { data } = await supabase
-      .from('training_program_settings')
-      .upsert({
-        user_id: user.id,
-        start_date: startDateInput,
-        is_active: true,
-      }, { onConflict: 'user_id' })
-      .select()
-      .single();
-    setSettings(data ?? null);
-    setSavingSettings(false);
-  }
-
-  async function changeStartDate() {
-    if (!user || !newStartDateInput) return;
-    setSavingSettings(true);
-    const { data } = await supabase
-      .from('training_program_settings')
-      .upsert({
-        user_id: user.id,
-        start_date: newStartDateInput,
-        is_active: true,
-      }, { onConflict: 'user_id' })
-      .select()
-      .single();
-    setSettings(data ?? null);
-    setEditingStartDate(false);
-    setNewStartDateInput('');
-    setSavingSettings(false);
-  }
-
-  // ---------------------------------------------------------------------------
-  // History detail
-  // ---------------------------------------------------------------------------
-
-  async function loadHistoryDetail(workout: TrainingWorkout) {
-    const result = await fetchWorkoutDetail(workout.id);
-    setHistoryDetail({ workout, exercises: result });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Guards
-  // ---------------------------------------------------------------------------
-
-  if (authLoading) {
+  // ------------------------------------------------------------------ form
+  const renderForm = () => {
+    if (!draft) return null;
+    const T = typeOf(draft.type); const Icon = T.icon;
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <p className="text-zinc-400 p-8">Please sign in to view training data.</p>;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Derived
-  // ---------------------------------------------------------------------------
-
-  const programInfo = settings ? getProgramDay(settings.start_date, selectedTrainingDate) : null;
-  const todayProgramDay = programInfo ? PROGRAM[(programInfo.day - 1) % 7] : null;
-  const isPhase2 = programInfo ? programInfo.week >= 5 : false;
-  const isViewingPast = selectedTrainingDate < getToday();
-  const isViewingFuture = selectedTrainingDate > getToday();
-  const phaseLabel = isPhase2 ? 'Push Phase' : 'Build Phase';
-  const phaseColor = isPhase2 ? 'bg-red-600/20 text-red-400 border-red-600/30' : 'bg-blue-600/20 text-blue-400 border-blue-600/30';
-  const alreadyCompleted = !!todayWorkout?.completed_at;
-
-  // ---------------------------------------------------------------------------
-  // Sub-renders
-  // ---------------------------------------------------------------------------
-
-  // -- Set row for strength exercise --
-  function renderStrengthSet(ex: LocalExercise, exIdx: number, set: LocalSet, setIdx: number) {
-    const repLabel =
-      set.targetReps === 'max'
-        ? 'Max reps'
-        : set.targetReps
-        ? ex.programExercise.sets?.[setIdx]?.perLeg || ex.programExercise.phase1Sets?.[setIdx]?.perLeg || ex.programExercise.phase2Sets?.[setIdx]?.perLeg
-          ? `${set.targetReps} reps/leg`
-          : `${set.targetReps} reps`
-        : null;
-
-    const targetStr = set.targetWeight
-      ? `${repLabel ?? 'reps'} @ ${set.targetWeight} lbs`
-      : repLabel ?? '';
-
-    return (
-      <div
-        key={setIdx}
-        className={cn(
-          'flex items-center gap-2 py-2.5 border-b border-zinc-800/60 last:border-0',
-          set.isCompleted && 'opacity-50'
-        )}
-      >
-        {/* Set number */}
-        <span className="text-zinc-500 text-sm w-6 shrink-0 text-center">{set.setNumber}</span>
-
-        {/* Target */}
-        <span className={cn('text-xs text-zinc-400 flex-1 min-w-0', set.isCompleted && 'line-through')}>
-          {targetStr || (set.targetWeight ? `${set.targetWeight} lbs` : '—')}
-        </span>
-
-        {/* Actual weight */}
-        <input
-          type="number"
-          inputMode="numeric"
-          value={set.actualWeight}
-          onChange={(e) => updateSet(exIdx, setIdx, { actualWeight: e.target.value })}
-          placeholder={set.targetWeight ? String(set.targetWeight) : 'lbs'}
-          className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white text-center focus:border-blue-500 focus:outline-none min-h-[44px]"
-        />
-
-        {/* Actual reps */}
-        <input
-          type="number"
-          inputMode="numeric"
-          value={set.actualReps}
-          onChange={(e) => updateSet(exIdx, setIdx, { actualReps: e.target.value })}
-          placeholder={set.targetReps === 'max' ? 'reps' : String(set.targetReps ?? 'reps')}
-          className="w-14 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white text-center focus:border-blue-500 focus:outline-none min-h-[44px]"
-        />
-
-        {/* Check button */}
-        <button
-          onClick={() => toggleSetComplete(exIdx, setIdx)}
-          className={cn(
-            'min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg transition-colors shrink-0',
-            set.isCompleted
-              ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/40'
-              : 'bg-zinc-800 text-zinc-500 border border-zinc-700 hover:border-emerald-600/50 hover:text-emerald-400'
-          )}
-        >
-          {set.isCompleted ? <CheckCircle2 className="h-5 w-5" /> : <Circle className="h-5 w-5" />}
-        </button>
-      </div>
-    );
-  }
-
-  // -- Intervals exercise --
-  function renderIntervalsExercise(ex: LocalExercise, exIdx: number) {
-    const minRounds = ex.programExercise.intervalRounds?.[0] ?? 6;
-    const maxRounds = ex.programExercise.intervalRounds?.[1] ?? 8;
-    const dist = ex.programExercise.intervalDistanceMeters ?? 400;
-    const restSec = ex.programExercise.intervalRestSec ?? 90;
-
-    return (
-      <div className="space-y-2">
-        <p className="text-xs text-zinc-400 mb-3">
-          {minRounds}–{maxRounds} rounds of {dist}m · {restSec}s rest between
-          {ex.programExercise.notes && ` · ${ex.programExercise.notes}`}
-        </p>
-        {ex.sets.map((set, setIdx) => (
-          <div key={setIdx} className="flex items-center gap-3 py-2 border-b border-zinc-800/60 last:border-0">
-            <span className="text-zinc-500 text-sm w-16 shrink-0">Round {set.setNumber}</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={set.timeSeconds}
-              onChange={(e) => updateSet(exIdx, setIdx, { timeSeconds: e.target.value })}
-              placeholder="mm:ss"
-              className="w-20 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white text-center focus:border-blue-500 focus:outline-none min-h-[44px]"
-            />
-            <button
-              onClick={() => toggleSetComplete(exIdx, setIdx)}
-              className={cn(
-                'min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg transition-colors',
-                set.isCompleted
-                  ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/40'
-                  : 'bg-zinc-800 text-zinc-500 border border-zinc-700 hover:border-emerald-600/50 hover:text-emerald-400'
-              )}
-            >
-              {set.isCompleted ? <CheckCircle2 className="h-5 w-5" /> : <Circle className="h-5 w-5" />}
-            </button>
-          </div>
-        ))}
-        {/* Add extra round */}
-        {ex.sets.length < maxRounds && (
-          <button
-            onClick={() => {
-              setExercises((prev) => {
-                const updated = [...prev];
-                const exCopy = { ...updated[exIdx] };
-                exCopy.sets = [
-                  ...exCopy.sets,
-                  {
-                    setNumber: exCopy.sets.length + 1,
-                    targetReps: null,
-                    targetWeight: null,
-                    actualWeight: '',
-                    actualReps: '',
-                    timeSeconds: '',
-                    isCompleted: false,
-                    dbId: null,
-                  },
-                ];
-                updated[exIdx] = exCopy;
-                return updated;
-              });
-            }}
-            className="text-xs text-blue-400 hover:text-blue-300 mt-1"
-          >
-            + Add round
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  // -- AMRAP exercise --
-  function renderAmrapExercise(ex: LocalExercise, exIdx: number) {
-    const totalSeconds = (ex.programExercise.amrapMinutes ?? 10) * 60;
-    const pct = Math.max(0, ex.amrapSecondsLeft / totalSeconds);
-
-    return (
-      <div className="space-y-4">
-        {ex.programExercise.notes && (
-          <p className="text-sm text-zinc-300 bg-zinc-800/50 rounded-lg p-3">{ex.programExercise.notes}</p>
-        )}
-
-        {/* Timer */}
-        <div className="flex flex-col items-center gap-3 py-2">
-          <div className="relative w-28 h-28">
-            <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
-              <circle cx="50" cy="50" r="44" stroke="#27272a" strokeWidth="8" fill="none" />
-              <circle
-                cx="50" cy="50" r="44"
-                stroke={pct > 0.5 ? '#3b82f6' : pct > 0.2 ? '#f59e0b' : '#ef4444'}
-                strokeWidth="8" fill="none"
-                strokeDasharray={`${2 * Math.PI * 44}`}
-                strokeDashoffset={`${2 * Math.PI * 44 * (1 - pct)}`}
-                strokeLinecap="round"
-              />
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-2xl font-bold text-white tabular-nums">
-                {formatTime(ex.amrapSecondsLeft)}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <button
-              onClick={() => updateExercise(exIdx, { amrapTimerRunning: !ex.amrapTimerRunning })}
-              className={cn(
-                'flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-base min-h-[52px] transition-colors',
-                ex.amrapTimerRunning
-                  ? 'bg-red-600 hover:bg-red-500 text-white'
-                  : ex.amrapSecondsLeft === 0
-                  ? 'bg-zinc-700 text-zinc-400 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-500 text-white'
-              )}
-              disabled={ex.amrapSecondsLeft === 0}
-            >
-              {ex.amrapTimerRunning ? <Square className="h-5 w-5" /> : <Play className="h-5 w-5" />}
-              {ex.amrapTimerRunning ? 'Stop' : 'Start'}
-            </button>
-            <button
-              onClick={() => updateExercise(exIdx, {
-                amrapSecondsLeft: (ex.programExercise.amrapMinutes ?? 10) * 60,
-                amrapTimerRunning: false,
-              })}
-              className="p-3 rounded-xl bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 min-h-[52px] min-w-[52px] flex items-center justify-center"
-            >
-              <RotateCcw className="h-5 w-5" />
-            </button>
-          </div>
+      <Card className={cn('border', T.bg)}>
+        <div className="flex items-center justify-between mb-3">
+          <div className={cn('flex items-center gap-2 font-semibold', T.color)}><Icon className="h-5 w-5" />{T.label} · {date === getToday() ? 'Today' : formatDate(date)}</div>
+          <button onClick={() => setDraft(null)} className="h-9 w-9 rounded-lg bg-zinc-800 text-zinc-400 flex items-center justify-center"><X className="h-4 w-4" /></button>
         </div>
 
-        {/* Result entry */}
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Rounds + Reps (e.g. 3 + 5)</label>
-            <input
-              type="text"
-              value={ex.amrapRounds}
-              onChange={(e) => updateExercise(exIdx, { amrapRounds: e.target.value })}
-              placeholder="e.g. 3 + 5"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-white focus:border-blue-500 focus:outline-none min-h-[44px]"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Notes</label>
-            <textarea
-              value={ex.amrapNotes}
-              onChange={(e) => updateExercise(exIdx, { amrapNotes: e.target.value })}
-              rows={2}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white resize-none focus:border-blue-500 focus:outline-none"
-              placeholder="Optional notes..."
-            />
-          </div>
-        </div>
-
-        <button
-          onClick={() => toggleExerciseComplete(exIdx)}
-          className={cn(
-            'w-full py-3 rounded-xl font-semibold text-base min-h-[52px] transition-colors',
-            ex.isCompleted
-              ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/40'
-              : 'bg-zinc-800 text-zinc-300 border border-zinc-700 hover:border-emerald-600/40'
-          )}
-        >
-          {ex.isCompleted ? 'Completed' : 'Mark Complete'}
-        </button>
-      </div>
-    );
-  }
-
-  // -- Cardio exercise --
-  function renderCardioExercise(ex: LocalExercise, exIdx: number) {
-    const durationStr = getDurationStr(ex.programExercise);
-
-    return (
-      <div className="space-y-4">
-        {durationStr && (
-          <p className="text-sm text-zinc-400">
-            Target: <span className="text-white font-medium">{durationStr}</span>
-          </p>
-        )}
-        {ex.programExercise.distanceMeters && (
-          <p className="text-sm text-zinc-400">
-            Distance: <span className="text-white font-medium">{(ex.programExercise.distanceMeters / 1000).toFixed(1)} km</span>
-          </p>
-        )}
-        {ex.programExercise.notes && (
-          <p className="text-sm text-zinc-300 bg-zinc-800/50 rounded-lg p-3">{ex.programExercise.notes}</p>
-        )}
-
-        {/* Timer */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              const running = !ex.cardioTimerRunning;
-              if (!running && ex.cardioElapsedSeconds > 0) {
-                // Stop — fill in the time
-                const formatted = formatTime(ex.cardioElapsedSeconds);
-                updateExercise(exIdx, { cardioTimerRunning: false, cardioTimeStr: formatted });
-              } else {
-                updateExercise(exIdx, { cardioTimerRunning: running });
-              }
-            }}
-            className={cn(
-              'flex items-center gap-2 px-5 py-3 rounded-xl font-semibold min-h-[52px] transition-colors',
-              ex.cardioTimerRunning
-                ? 'bg-red-600 hover:bg-red-500 text-white'
-                : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
-            )}
-          >
-            {ex.cardioTimerRunning ? <Square className="h-5 w-5" /> : <Timer className="h-5 w-5" />}
-            {ex.cardioTimerRunning
-              ? formatTime(ex.cardioElapsedSeconds)
-              : ex.cardioElapsedSeconds > 0
-              ? formatTime(ex.cardioElapsedSeconds)
-              : 'Timer'}
-          </button>
-
-          <div className="flex-1">
-            <label className="text-xs text-zinc-400 block mb-1">Time (mm:ss)</label>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={ex.cardioTimeStr}
-              onChange={(e) => updateExercise(exIdx, { cardioTimeStr: e.target.value })}
-              placeholder="mm:ss"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 focus:outline-none min-h-[44px]"
-            />
-          </div>
-        </div>
-
-        <button
-          onClick={() => toggleExerciseComplete(exIdx)}
-          className={cn(
-            'w-full py-3 rounded-xl font-semibold text-base min-h-[52px] transition-colors',
-            ex.isCompleted
-              ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/40'
-              : 'bg-zinc-800 text-zinc-300 border border-zinc-700 hover:border-emerald-600/40'
-          )}
-        >
-          {ex.isCompleted ? 'Completed' : 'Mark Complete'}
-        </button>
-      </div>
-    );
-  }
-
-  // -- Circuit exercise --
-  function renderCircuitExercise(ex: LocalExercise, exIdx: number) {
-    return (
-      <div className="space-y-4">
-        {ex.programExercise.notes && (
-          <p className="text-sm text-zinc-300 bg-zinc-800/50 rounded-lg p-3">{ex.programExercise.notes}</p>
-        )}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Rounds completed</label>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => updateExercise(exIdx, { circuitRounds: Math.max(0, ex.circuitRounds - 1) })}
-                className="min-h-[44px] min-w-[44px] bg-zinc-800 border border-zinc-700 rounded-lg flex items-center justify-center text-zinc-300 hover:bg-zinc-700"
-              >
-                −
-              </button>
-              <span className="text-xl font-bold text-white w-8 text-center">{ex.circuitRounds}</span>
-              <button
-                onClick={() => updateExercise(exIdx, { circuitRounds: Math.min(5, ex.circuitRounds + 1) })}
-                className="min-h-[44px] min-w-[44px] bg-zinc-800 border border-zinc-700 rounded-lg flex items-center justify-center text-zinc-300 hover:bg-zinc-700"
-              >
-                +
-              </button>
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Total time (mm:ss)</label>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={ex.circuitTime}
-              onChange={(e) => updateExercise(exIdx, { circuitTime: e.target.value })}
-              placeholder="mm:ss"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 focus:outline-none min-h-[44px]"
-            />
-          </div>
-        </div>
-        <div>
-          <label className="text-xs text-zinc-400 block mb-1">Notes</label>
-          <textarea
-            value={ex.circuitNotes}
-            onChange={(e) => updateExercise(exIdx, { circuitNotes: e.target.value })}
-            rows={2}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white resize-none focus:border-blue-500 focus:outline-none"
-            placeholder="Optional notes..."
-          />
-        </div>
-        <button
-          onClick={() => toggleExerciseComplete(exIdx)}
-          className={cn(
-            'w-full py-3 rounded-xl font-semibold text-base min-h-[52px] transition-colors',
-            ex.isCompleted
-              ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/40'
-              : 'bg-zinc-800 text-zinc-300 border border-zinc-700 hover:border-emerald-600/40'
-          )}
-        >
-          {ex.isCompleted ? 'Completed' : 'Mark Complete'}
-        </button>
-      </div>
-    );
-  }
-
-  // -- Optional exercise (Day 6) --
-  function renderOptionalExercise(exIdx: number) {
-    const ex = exercises[exIdx];
-    const optionAEx = exercises.find((e) => e.programExercise.name.includes('Option A'));
-    const optionBEx = exercises.find((e) => e.programExercise.name.includes('Option B'));
-    const optionAIdx = exercises.findIndex((e) => e.programExercise.name.includes('Option A'));
-    const optionBIdx = exercises.findIndex((e) => e.programExercise.name.includes('Option B'));
-
-    // Only render the selector once (for option A), then show active option
-    if (exIdx === optionAIdx) {
-      const selected = ex.optionSelected ?? optionAEx?.optionSelected ?? null;
-      return (
-        <div className="space-y-4">
-          <p className="text-sm text-zinc-400">Choose one option for today:</p>
-          <div className="grid grid-cols-2 gap-3">
-            {optionAEx && (
-              <button
-                onClick={() => {
-                  updateExercise(optionAIdx, { optionSelected: 'A' });
-                  if (optionBIdx >= 0) updateExercise(optionBIdx, { optionSelected: 'A' });
-                }}
-                className={cn(
-                  'p-4 rounded-xl border text-left transition-colors',
-                  selected === 'A'
-                    ? 'bg-blue-600/20 border-blue-600/50 text-white'
-                    : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-600'
-                )}
-              >
-                <div className="font-semibold text-sm mb-1">Option A</div>
-                <div className="text-xs text-zinc-400">{optionAEx.programExercise.notes}</div>
-                {optionAEx.programExercise.durationMin && (
-                  <div className="text-xs text-zinc-500 mt-1">{getDurationStr(optionAEx.programExercise)}</div>
-                )}
-              </button>
-            )}
-            {optionBEx && (
-              <button
-                onClick={() => {
-                  if (optionAIdx >= 0) updateExercise(optionAIdx, { optionSelected: 'B' });
-                  updateExercise(optionBIdx, { optionSelected: 'B' });
-                }}
-                className={cn(
-                  'p-4 rounded-xl border text-left transition-colors',
-                  selected === 'B'
-                    ? 'bg-blue-600/20 border-blue-600/50 text-white'
-                    : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-600'
-                )}
-              >
-                <div className="font-semibold text-sm mb-1">Option B</div>
-                <div className="text-xs text-zinc-400">{optionBEx.programExercise.notes}</div>
-              </button>
-            )}
-          </div>
-
-          {/* Show tracker for selected option */}
-          {selected === 'A' && optionAEx && (
-            <div className="mt-2">{renderCardioExercise(optionAEx, optionAIdx)}</div>
-          )}
-          {selected === 'B' && optionBEx && (
-            <div className="mt-2">{renderCircuitExercise(optionBEx, optionBIdx)}</div>
-          )}
-        </div>
-      );
-    }
-
-    // Don't re-render option B standalone (it's shown inside A's block)
-    return null;
-  }
-
-  // -- Single exercise block in active workout --
-  function renderExerciseBlock(ex: LocalExercise, exIdx: number) {
-    const { type } = ex.programExercise;
-
-    if (type === 'rest') {
-      return (
-        <Card key={exIdx} className="border-zinc-800">
-          <div className="flex items-center gap-3">
-            <span className="text-3xl">🛌</span>
-            <div>
-              <div className="font-semibold text-white text-lg">Rest Day</div>
-              {ex.programExercise.notes && (
-                <p className="text-sm text-zinc-400 mt-1">{ex.programExercise.notes}</p>
-              )}
-            </div>
-          </div>
-        </Card>
-      );
-    }
-
-    if (type === 'optional') {
-      const optionAIdx = exercises.findIndex((e) => e.programExercise.name.includes('Option A'));
-      if (exIdx !== optionAIdx) return null;
-      return (
-        <Card key={exIdx}>
-          <CardHeader>
-            <CardTitle>Optional Activity</CardTitle>
-          </CardHeader>
-          {renderOptionalExercise(exIdx)}
-        </Card>
-      );
-    }
-
-    let content: React.ReactNode;
-    switch (type) {
-      case 'strength':
-        content = (
-          <>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs text-zinc-500">Set</span>
-              <span className="flex-1 text-xs text-zinc-500">Target</span>
-              <span className="w-16 text-xs text-zinc-500 text-center">Weight</span>
-              <span className="w-14 text-xs text-zinc-500 text-center">Reps</span>
-              <span className="w-11" />
-            </div>
-            {ex.sets.map((set, setIdx) => renderStrengthSet(ex, exIdx, set, setIdx))}
-          </>
-        );
-        break;
-      case 'intervals':
-        content = renderIntervalsExercise(ex, exIdx);
-        break;
-      case 'amrap':
-        content = renderAmrapExercise(ex, exIdx);
-        break;
-      case 'cardio':
-        content = renderCardioExercise(ex, exIdx);
-        break;
-      case 'circuit':
-        content = renderCircuitExercise(ex, exIdx);
-        break;
-      default:
-        content = null;
-    }
-
-    const allSetsComplete = type === 'strength'
-      ? ex.sets.length > 0 && ex.sets.every((s) => s.isCompleted)
-      : ex.isCompleted;
-
-    return (
-      <Card key={exIdx} className={cn(allSetsComplete && 'border-emerald-800/40 bg-emerald-950/20')}>
-        <CardHeader className="mb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">{ex.programExercise.name}</CardTitle>
-            {allSetsComplete && <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />}
-          </div>
-          {ex.programExercise.notes && type !== 'amrap' && type !== 'circuit' && (
-            <p className="text-xs text-zinc-500 mt-1">{ex.programExercise.notes}</p>
-          )}
-          {ex.programExercise.milestoneMatch && oneRMCache[ex.programExercise.milestoneMatch] && (
-            <p className="text-xs text-zinc-500 mt-0.5">
-              1RM: <span className="text-amber-400">{oneRMCache[ex.programExercise.milestoneMatch]} lbs</span>
-            </p>
-          )}
-          {ex.programExercise.milestoneMatch && !oneRMCache[ex.programExercise.milestoneMatch] && (
-            <p className="text-xs text-zinc-600 mt-0.5">1RM: ? (not set)</p>
-          )}
-        </CardHeader>
-        {content}
-      </Card>
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tab: TODAY
-  // ---------------------------------------------------------------------------
-
-  function renderTodayTab() {
-    if (settingsLoading || workoutLoading) {
-      return (
-        <div className="flex items-center justify-center h-32">
-          <div className="animate-spin h-6 w-6 border-2 border-blue-500 border-t-transparent rounded-full" />
-        </div>
-      );
-    }
-
-    // No settings yet
-    if (!settings) {
-      return (
-        <Card>
-          <CardHeader>
-            <CardTitle>Set Program Start Date</CardTitle>
-          </CardHeader>
-          <p className="text-zinc-400 text-sm mb-4">
-            Set the date you started (or plan to start) the HYROX Hybrid Training program. The app will automatically track your current week and day.
-          </p>
-          <div className="space-y-4 max-w-xs">
-            <div>
-              <label className="text-xs text-zinc-400 block mb-1">Program Start Date</label>
-              <input
-                type="date"
-                value={startDateInput}
-                onChange={(e) => setStartDateInput(e.target.value)}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white min-h-[44px] focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-            <button
-              onClick={saveSettings}
-              disabled={savingSettings}
-              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3 rounded-xl font-semibold min-h-[52px] transition-colors"
-            >
-              {savingSettings ? 'Saving...' : 'Start Program'}
-            </button>
-          </div>
-        </Card>
-      );
-    }
-
-    if (!programInfo || !todayProgramDay) return null;
-
-    // Shared date nav + header block
-    const dateNavBlock = (
-      <div className="space-y-3">
-        {/* Date navigation */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setSelectedTrainingDate((d) => shiftDate(d, -1))}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <div className="flex-1 text-center">
-            <span className="text-base font-semibold text-white">
-              {selectedTrainingDate === getToday()
-                ? 'Today'
-                : isViewingPast
-                ? formatDate(selectedTrainingDate)
-                : formatDate(selectedTrainingDate)}
-            </span>
-            {selectedTrainingDate !== getToday() && (
-              <button
-                onClick={() => setSelectedTrainingDate(getToday())}
-                className="ml-2 text-xs text-blue-400 hover:text-blue-300 underline"
-              >
-                Back to today
-              </button>
-            )}
-          </div>
-          <button
-            onClick={() => setSelectedTrainingDate((d) => shiftDate(d, 1))}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
-          >
-            <ChevronRight className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Week/day header + change start date */}
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xl font-bold text-white">
-                Week {programInfo.week} · Day {programInfo.day}
-              </span>
-              <span className={cn('text-xs px-2 py-1 rounded-full border font-medium', phaseColor)}>
-                {phaseLabel}
-              </span>
-            </div>
-            <p className={cn('text-sm font-medium mt-0.5', todayProgramDay.color)}>
-              {todayProgramDay.focus}
-            </p>
-          </div>
-          <button
-            onClick={() => { setEditingStartDate(true); setNewStartDateInput(settings!.start_date); }}
-            className="text-xs text-zinc-500 hover:text-zinc-300 border border-zinc-700 rounded-lg px-3 py-2 min-h-[44px] transition-colors"
-          >
-            Started {formatDate(settings!.start_date)}
-          </button>
-        </div>
-
-        {/* Change start date inline form */}
-        {editingStartDate && (
-          <div className="flex items-center gap-2 bg-zinc-800/60 border border-zinc-700 rounded-xl p-3">
-            <span className="text-xs text-zinc-400 shrink-0">New start date:</span>
-            <input
-              type="date"
-              value={newStartDateInput}
-              onChange={(e) => setNewStartDateInput(e.target.value)}
-              className="flex-1 bg-zinc-900 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-white min-h-[44px] focus:border-blue-500 focus:outline-none"
-            />
-            <button
-              onClick={changeStartDate}
-              disabled={savingSettings || !newStartDateInput}
-              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium min-h-[44px] transition-colors"
-            >
-              Save
-            </button>
-            <button
-              onClick={() => setEditingStartDate(false)}
-              className="text-zinc-400 hover:text-white px-3 py-2 rounded-lg text-sm min-h-[44px] transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-      </div>
-    );
-
-    // Future workout — locked
-    if (isViewingFuture) {
-      return (
-        <div className="space-y-4">
-          {dateNavBlock}
-          <Card className="border-zinc-800">
-            <div className="flex items-center gap-4 py-4">
-              <span className="text-4xl">🔒</span>
-              <div>
-                <div className="text-lg font-bold text-zinc-400">{todayProgramDay.name}</div>
-                <p className={cn('text-sm font-medium mt-0.5', todayProgramDay.color)}>
-                  {todayProgramDay.focus}
-                </p>
-                <p className="text-zinc-500 text-sm mt-1">
-                  Available on {formatDate(selectedTrainingDate)}
-                </p>
-              </div>
-            </div>
-            <div className="space-y-1 border-t border-zinc-800 pt-3 mt-2">
-              {todayProgramDay.exercises.filter(e => e.type !== 'rest').map((ex, i) => (
-                <div key={i} className="flex items-center gap-2 py-1 text-sm text-zinc-500">
-                  <span className="w-4 text-center text-xs">{i + 1}</span>
-                  <span>{ex.name}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-      );
-    }
-
-    // Rest day — no workout tracker needed
-    if (todayProgramDay.exercises[0]?.type === 'rest') {
-      return (
-        <div className="space-y-4">
-          {dateNavBlock}
-          <Card className="border-zinc-800">
-            <div className="flex items-center gap-4 py-4">
-              <span className="text-5xl">🛌</span>
-              <div>
-                <div className="text-xl font-bold text-white">Rest Day</div>
-                <p className="text-zinc-400 mt-1">{todayProgramDay.exercises[0]?.notes}</p>
-              </div>
-            </div>
-          </Card>
-        </div>
-      );
-    }
-
-    // Already completed — show detailed read-only results
-    if (alreadyCompleted && !workoutStarted) {
-      const startedAt = todayWorkout?.started_at ? new Date(todayWorkout.started_at) : null;
-      const completedAt = todayWorkout?.completed_at ? new Date(todayWorkout.completed_at) : null;
-      const durationMin = startedAt && completedAt
-        ? Math.round((completedAt.getTime() - startedAt.getTime()) / 60000)
-        : null;
-
-      return (
-        <div className="space-y-4">
-          {dateNavBlock}
-
-          {/* Completed badge */}
-          <Card className="border-emerald-800/50 bg-emerald-950/20">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-6 w-6 text-emerald-400 shrink-0" />
-                <div>
-                  <div className="text-base font-bold text-emerald-400">
-                    Completed{isViewingPast ? ` · ${formatDate(selectedTrainingDate)}` : ''}
-                  </div>
-                  <div className="text-sm text-zinc-400 mt-0.5">
-                    {todayProgramDay.focus}
-                    {durationMin ? ` · ${durationMin} min` : ''}
-                  </div>
-                </div>
-              </div>
-              {!isViewingPast && (
-                <button
-                  onClick={async () => {
-                    const orCache = await buildOneRMCache(todayProgramDay);
-                    const restored = completedWorkoutDetail && completedWorkoutDetail.length > 0
-                      ? restoreExercisesFromDB(completedWorkoutDetail, todayProgramDay, programInfo.week, orCache)
-                      : buildExercises(todayProgramDay, programInfo.week, orCache);
-                    setExercises(restored);
-                    setWorkoutStarted(true);
-                  }}
-                  className="text-xs text-blue-400 hover:text-blue-300 border border-blue-800/40 rounded-lg px-3 py-2 min-h-[40px] whitespace-nowrap"
-                >
-                  Edit
-                </button>
-              )}
-            </div>
-          </Card>
-
-          {/* Exercise results */}
-          {completedWorkoutDetail === null ? (
-            // Still fetching
-            <div className="flex items-center justify-center h-16">
-              <div className="animate-spin h-5 w-5 border-2 border-emerald-500 border-t-transparent rounded-full" />
-            </div>
-          ) : completedWorkoutDetail.length === 0 ? (
-            // Workout was completed but no set data was saved (logged before persistence fix)
-            <Card className="border-zinc-800">
-              <p className="text-sm text-zinc-500 py-2">
-                This workout was marked complete but no exercise data was recorded.
-              </p>
-            </Card>
-          ) : (
-            completedWorkoutDetail.map((dbEx) => {
-              const hasSets = dbEx.sets.some(
-                (s) => s.actual_reps || s.actual_weight || s.time_seconds || s.notes
-              );
-              return (
-                <Card key={dbEx.id} className={cn(
-                  'border-zinc-800',
-                  dbEx.sets.some(s => s.is_completed) && 'border-emerald-900/40'
-                )}>
-                  <CardHeader className="mb-2">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-sm">{dbEx.exercise_name}</CardTitle>
-                      {dbEx.sets.some(s => s.is_completed) && (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                      )}
-                    </div>
-                  </CardHeader>
-                  {hasSets ? (
-                    <div>
-                      {dbEx.exercise_type === 'strength' && (
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span className="text-[10px] text-zinc-600 w-6 text-center">#</span>
-                          <span className="text-[10px] text-zinc-600 w-16 text-center">Weight</span>
-                          <span className="text-[10px] text-zinc-600 w-14 text-center">Reps</span>
-                        </div>
-                      )}
-                      {dbEx.sets.map((s) => (
-                        <div key={s.id} className={cn(
-                          'flex items-center gap-2 py-2 border-b border-zinc-800/50 last:border-0 text-sm',
-                          !s.is_completed && 'opacity-40'
-                        )}>
-                          {dbEx.exercise_type === 'strength' && (
-                            <>
-                              <span className="text-zinc-500 w-6 text-center text-xs">{s.set_number}</span>
-                              <span className="w-16 text-center font-medium text-white">
-                                {s.actual_weight != null ? `${s.actual_weight} lbs` : '—'}
-                              </span>
-                              <span className="w-14 text-center text-zinc-300">
-                                {s.actual_reps != null ? `${s.actual_reps}` : '—'}
-                              </span>
-                              {s.is_completed && <CheckCircle2 className="h-4 w-4 text-emerald-500 ml-auto" />}
-                            </>
-                          )}
-                          {dbEx.exercise_type === 'intervals' && (
-                            <>
-                              <span className="text-zinc-500 text-xs">Round {s.set_number}</span>
-                              <span className="text-white font-medium ml-2">
-                                {s.time_seconds != null ? formatTime(s.time_seconds) : '—'}
-                              </span>
-                              {s.is_completed && <CheckCircle2 className="h-4 w-4 text-emerald-500 ml-auto" />}
-                            </>
-                          )}
-                          {(dbEx.exercise_type === 'amrap' || dbEx.exercise_type === 'circuit') && (
-                            <>
-                              {s.actual_reps != null && (
-                                <span className="text-white font-medium">
-                                  {dbEx.exercise_type === 'amrap' ? `${s.actual_reps} rounds` : `${s.actual_reps}× rounds`}
-                                </span>
-                              )}
-                              {s.time_seconds != null && (
-                                <span className="text-zinc-300 ml-2">{formatTime(s.time_seconds)}</span>
-                              )}
-                              {s.notes && <span className="text-zinc-400 text-xs ml-2 truncate">{s.notes}</span>}
-                            </>
-                          )}
-                          {(dbEx.exercise_type === 'cardio' || dbEx.exercise_type === 'optional') && (
-                            <>
-                              {s.time_seconds != null && (
-                                <span className="text-white font-medium">{formatTime(s.time_seconds)}</span>
-                              )}
-                              {s.is_completed && <CheckCircle2 className="h-4 w-4 text-emerald-500 ml-auto" />}
-                            </>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-zinc-600">No data recorded</p>
-                  )}
-                </Card>
-              );
-            })
-          )}
-        </div>
-      );
-    }
-
-    // Not started yet — preview + start button (only available for today or past dates)
-    if (!workoutStarted) {
-      const isPastUnlogged = isViewingPast && !alreadyCompleted;
-      return (
-        <div className="space-y-4">
-          {dateNavBlock}
-
-          {isPastUnlogged && (
-            <div className="flex items-center gap-2 bg-amber-950/20 border border-amber-800/30 rounded-xl px-4 py-3 text-sm text-amber-400">
-              <span>⚠</span>
-              <span>This workout was not logged. You can still log it retroactively.</span>
-            </div>
-          )}
-
-          {/* Exercise preview */}
-          <Card>
-            <CardHeader>
-              <CardTitle>{selectedTrainingDate === getToday() ? "Today's Workout" : "Workout Preview"}</CardTitle>
-            </CardHeader>
-            <div className="space-y-2">
-              {todayProgramDay.exercises.map((ex, i) => (
-                <div key={i} className="flex items-start gap-3 py-2 border-b border-zinc-800/60 last:border-0">
-                  <div className="flex items-center justify-center w-6 h-6 rounded-full bg-zinc-800 text-xs text-zinc-400 shrink-0 mt-0.5">
-                    {i + 1}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-white">{ex.name}</div>
-                    {ex.type === 'strength' && (
-                      <div className="text-xs text-zinc-500 mt-0.5">
-                        {((isPhase2 ? ex.phase2Sets : ex.phase1Sets) ?? ex.sets ?? []).length} sets
-                        {ex.milestoneMatch && (
-                          <span className="ml-2 text-amber-500/70">1RM tracked</span>
-                        )}
-                      </div>
-                    )}
-                    {ex.type === 'amrap' && (
-                      <div className="text-xs text-zinc-500 mt-0.5">{ex.amrapMinutes} min AMRAP</div>
-                    )}
-                    {ex.type === 'intervals' && (
-                      <div className="text-xs text-zinc-500 mt-0.5">
-                        {ex.intervalRounds?.[0]}–{ex.intervalRounds?.[1]} × {ex.intervalDistanceMeters}m
-                      </div>
-                    )}
-                    {(ex.type === 'cardio' || ex.type === 'optional') && getDurationStr(ex) && (
-                      <div className="text-xs text-zinc-500 mt-0.5">{getDurationStr(ex)}</div>
-                    )}
-                    {ex.notes && <div className="text-xs text-zinc-600 mt-0.5 truncate">{ex.notes}</div>}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <button
-              onClick={startWorkout}
-              className="mt-5 w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold text-lg min-h-[60px] transition-colors"
-            >
-              <Play className="h-6 w-6" />
-              {isPastUnlogged ? 'Log Retroactively' : 'Start Workout'}
-            </button>
-          </Card>
-        </div>
-      );
-    }
-
-    // Active workout tracker
-    return (
-      <div className="space-y-4">
-        {dateNavBlock}
-
-        {/* Save indicator */}
-        <div className="flex items-center justify-end h-5">
-          {isSaving && (
-            <span className="flex items-center gap-1.5 text-xs text-zinc-500">
-              <div className="w-3 h-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
-              Saving…
-            </span>
-          )}
-          {!isSaving && lastSavedAt && (
-            <span className="text-xs text-emerald-600">✓ Saved</span>
-          )}
-        </div>
-
-        {/* Exercise blocks */}
-        {exercises.map((ex, idx) => renderExerciseBlock(ex, idx))}
-
-        {/* Complete button */}
-        <button
-          onClick={completeWorkout}
-          disabled={completingWorkout}
-          className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white py-4 rounded-xl font-bold text-lg min-h-[60px] transition-colors mt-2"
-        >
-          <Trophy className="h-6 w-6" />
-          {completingWorkout ? 'Saving...' : 'Complete Workout'}
-        </button>
-      </div>
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tab: PROGRAM
-  // ---------------------------------------------------------------------------
-
-  function renderProgramTab() {
-    if (!settings || !programInfo) {
-      return (
-        <Card>
-          <p className="text-zinc-400 text-sm">Set a program start date in the Today tab to see your program overview.</p>
-        </Card>
-      );
-    }
-
-    const today = getToday();
-
-    // Build a map of date -> workout for completed workouts
-    // We need a range of 8 weeks
-    const startDate = new Date(settings.start_date + 'T00:00:00');
-
-    // Fetch completed workouts for grid (use historyWorkouts — also fetch all)
-    // We'll use historyWorkouts if available, but we need to ensure it's loaded
-    const completedDates = new Set(historyWorkouts.map((w) => w.date));
-
-    // Stats
-    const totalCompleted = historyWorkouts.length;
-    const weeklyStats: { week: number; completed: number; total: number }[] = [];
-    for (let w = 1; w <= 8; w++) {
-      const workoutsInWeek = historyWorkouts.filter((hw) => hw.week_number === w);
-      weeklyStats.push({ week: w, completed: workoutsInWeek.length, total: 6 }); // Day 7 is rest
-    }
-
-    // Streak
-    let streak = 0;
-    const d = new Date(today + 'T00:00:00');
-    while (true) {
-      const ds = d.toISOString().split('T')[0];
-      const dayProgram = PROGRAM[(Math.floor((d.getTime() - startDate.getTime()) / 86400000) % 7)];
-      if (dayProgram?.exercises[0]?.type === 'rest') {
-        d.setDate(d.getDate() - 1);
-        continue;
-      }
-      if (!completedDates.has(ds)) break;
-      streak++;
-      d.setDate(d.getDate() - 1);
-    }
-
-    return (
-      <div className="space-y-6">
-        {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3">
-          <Card className="text-center">
-            <div className="text-2xl font-bold text-white">{totalCompleted}</div>
-            <div className="text-xs text-zinc-400 mt-1">Total Workouts</div>
-          </Card>
-          <Card className="text-center">
-            <div className="text-2xl font-bold text-amber-400 flex items-center justify-center gap-1">
-              <Flame className="h-5 w-5" />
-              {streak}
-            </div>
-            <div className="text-xs text-zinc-400 mt-1">Day Streak</div>
-          </Card>
-          <Card className="text-center">
-            <div className="text-2xl font-bold text-blue-400">W{programInfo.week}</div>
-            <div className="text-xs text-zinc-400 mt-1">Current Week</div>
-          </Card>
-        </div>
-
-        {/* 8-week grid */}
-        <Card>
-          <CardHeader>
-            <CardTitle>8-Week Program</CardTitle>
-          </CardHeader>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr>
-                  <th className="text-left text-zinc-500 pb-2 pr-3 font-normal">Week</th>
-                  {PROGRAM.map((day) => (
-                    <th key={day.dayNumber} className="text-center text-zinc-500 pb-2 px-1 font-normal w-10">
-                      D{day.dayNumber}
-                    </th>
-                  ))}
-                  <th className="text-right text-zinc-500 pb-2 pl-2 font-normal whitespace-nowrap">Rate</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({ length: 8 }, (_, weekIdx) => {
-                  const weekNum = weekIdx + 1;
-                  const stat = weeklyStats[weekIdx];
-                  return (
-                    <tr key={weekNum} className={cn(weekNum === programInfo.week && 'bg-blue-950/20 rounded')}>
-                      <td className={cn(
-                        'py-2 pr-3 font-semibold whitespace-nowrap',
-                        weekNum === programInfo.week ? 'text-blue-400' : 'text-zinc-400'
-                      )}>
-                        W{weekNum}
-                        {weekNum <= 4 ? (
-                          <span className="ml-1 text-zinc-600 font-normal">Build</span>
-                        ) : (
-                          <span className="ml-1 text-red-700 font-normal">Push</span>
-                        )}
-                      </td>
-                      {PROGRAM.map((day) => {
-                        const daysSinceStart = (weekIdx) * 7 + (day.dayNumber - 1);
-                        const cellDate = new Date(startDate);
-                        cellDate.setDate(cellDate.getDate() + daysSinceStart);
-                        const cellDateStr = cellDate.toISOString().split('T')[0];
-                        const isToday = cellDateStr === today;
-                        const isCompleted = completedDates.has(cellDateStr);
-                        const isPast = cellDateStr < today;
-                        const isFuture = cellDateStr > today;
-                        const isRest = day.exercises[0]?.type === 'rest';
-
-                        return (
-                          <td key={day.dayNumber} className="py-2 px-1 text-center">
-                            <button
-                              onClick={() => {
-                                setSelectedTrainingDate(cellDateStr);
-                                setActiveTab('today');
-                              }}
-                              className={cn(
-                                'w-8 h-8 mx-auto rounded-lg flex items-center justify-center text-[11px] font-medium transition-colors cursor-pointer hover:ring-2 hover:ring-zinc-500',
-                                isToday && !isCompleted && 'bg-blue-600 text-white ring-2 ring-blue-400',
-                                isCompleted && 'bg-emerald-700/40 text-emerald-400',
-                                isPast && !isCompleted && !isRest && 'bg-red-900/30 text-red-500',
-                                isFuture && !isToday && 'bg-zinc-800/50 text-zinc-600',
-                                isRest && !isCompleted && 'bg-zinc-800/30 text-zinc-600',
-                              )}
-                            >
-                              {isCompleted ? '✓' : isRest ? '—' : day.dayNumber}
-                            </button>
-                          </td>
-                        );
-                      })}
-                      <td className="py-2 pl-2 text-right text-zinc-400 whitespace-nowrap">
-                        {stat.completed}/{stat.total}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        {/* Per-week completion bars */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Weekly Completion</CardTitle>
-          </CardHeader>
+        {draft.type === 'run' && (
           <div className="space-y-3">
-            {weeklyStats.map((s) => {
-              const pct = Math.round((s.completed / s.total) * 100);
-              const barColor = pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-zinc-700';
+            <div className="grid grid-cols-3 gap-2">{RUN_SUBTYPES.map((r) => (
+              <button key={r.key} onClick={() => setDraft({ ...draft, subtype: r.key, rounds: r.key === 'vo2' ? 4 : r.key === 'sprints' ? 8 : null })} className={cn('rounded-xl border p-2.5 text-left', draft.subtype === r.key ? 'bg-sky-500/20 border-sky-400 text-white' : 'bg-zinc-800/60 border-zinc-700 text-zinc-400')}>
+                <div className="text-sm font-medium">{r.label}</div><div className="text-[10px] opacity-70 leading-tight mt-0.5">{r.hint}</div></button>))}</div>
+            {draft.subtype === 'distance' && (
+              <div className="grid grid-cols-2 gap-2">
+                <Num label="Distance" unit="km" step="0.1" value={draft.distance_km} onChange={(v) => setDraft({ ...draft, distance_km: v })} />
+                <label className="bg-zinc-800/60 rounded-xl p-3 block"><span className="text-xs text-zinc-400">Time (mm:ss)</span>
+                  <input value={timeText} onChange={(e) => { setTimeText(e.target.value); setDraft({ ...draft, duration_min: parseTime(e.target.value) }); }} placeholder="27:30" inputMode="numeric" className="w-full bg-transparent text-2xl font-semibold text-white outline-none placeholder:text-zinc-600" /></label>
+                <Num label="Avg HR" unit="bpm" value={draft.avg_hr} onChange={(v) => setDraft({ ...draft, avg_hr: v })} mode="numeric" />
+                <Num label="Max HR" unit="bpm" value={draft.max_hr} onChange={(v) => setDraft({ ...draft, max_hr: v })} mode="numeric" />
+                <div className="col-span-2 flex items-center justify-between bg-zinc-900/60 rounded-xl px-3 py-2 text-sm"><span className="text-zinc-400">Pace</span><span className="text-white font-semibold tabular-nums">{fmtPace(pace(draft.duration_min, draft.distance_km))}</span>
+                  {draft.distance_km && RUN_MILESTONES.some((r) => Math.abs(r.km - draft.distance_km!) / r.km <= 0.05) && <span className="text-xs text-amber-400 flex items-center gap-1"><Trophy className="h-3.5 w-3.5" />checks PR</span>}</div>
+              </div>
+            )}
+            {draft.subtype === 'vo2' && (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="col-span-2 bg-zinc-800/60 rounded-xl p-3 flex items-center justify-between"><span className="text-xs text-zinc-400">Rounds</span>
+                  <div className="flex items-center gap-2"><button onClick={() => setDraft({ ...draft, rounds: Math.max(1, (draft.rounds ?? 4) - 1) })} className="h-10 w-10 rounded-lg bg-zinc-900 text-zinc-300 flex items-center justify-center"><Minus className="h-4 w-4" /></button><span className="text-2xl font-semibold text-white w-8 text-center">{draft.rounds ?? 4}</span><button onClick={() => setDraft({ ...draft, rounds: (draft.rounds ?? 4) + 1 })} className="h-10 w-10 rounded-lg bg-zinc-900 text-zinc-300 flex items-center justify-center"><Plus className="h-4 w-4" /></button></div></div>
+                <Num label="Work" unit="min" value={(draft.work_sec ?? 240) / 60} onChange={(v) => setDraft({ ...draft, work_sec: v == null ? null : Math.round(v * 60) })} step="0.5" />
+                <Num label="Walk" unit="min" value={(draft.rest_sec ?? 180) / 60} onChange={(v) => setDraft({ ...draft, rest_sec: v == null ? null : Math.round(v * 60) })} step="0.5" />
+                <Num label="Avg HR" unit="bpm" value={draft.avg_hr} onChange={(v) => setDraft({ ...draft, avg_hr: v })} mode="numeric" />
+                <Num label="Max HR" unit="bpm" value={draft.max_hr} onChange={(v) => setDraft({ ...draft, max_hr: v })} mode="numeric" />
+                <Num label="Distance (opt)" unit="km" step="0.1" value={draft.distance_km} onChange={(v) => setDraft({ ...draft, distance_km: v })} />
+                <div className="bg-zinc-900/60 rounded-xl p-3 text-sm flex flex-col justify-center"><span className="text-xs text-zinc-400">Total</span><span className="text-white font-semibold">{Math.round(((draft.rounds ?? 4) * ((draft.work_sec ?? 240) + (draft.rest_sec ?? 180))) / 60)} min</span></div>
+              </div>
+            )}
+            {draft.subtype === 'sprints' && (
+              <div className="grid grid-cols-2 gap-2">
+                <Num label="Sprints" value={draft.rounds} onChange={(v) => setDraft({ ...draft, rounds: v })} mode="numeric" />
+                <Num label="Rest" unit="s" value={draft.rest_sec} onChange={(v) => setDraft({ ...draft, rest_sec: v })} mode="numeric" />
+                <Num label="Total distance" unit="km" step="0.1" value={draft.distance_km} onChange={(v) => setDraft({ ...draft, distance_km: v })} />
+                <Num label="Max HR" unit="bpm" value={draft.max_hr} onChange={(v) => setDraft({ ...draft, max_hr: v })} mode="numeric" />
+              </div>
+            )}
+            <Rpe />
+          </div>
+        )}
+
+        {(draft.type === 'crossfit' || draft.type === 'hyrox') && (
+          <div className="space-y-3">
+            {draft.type === 'crossfit' && (
+              <div className="grid grid-cols-2 gap-2">{[{ k: 'class', l: 'Regular class' }, { k: 'hyrox_class', l: 'HYROX class' }].map((o) => (
+                <button key={o.k} onClick={() => setDraft({ ...draft, subtype: o.k })} className={cn('rounded-xl border p-3 text-sm font-medium', draft.subtype === o.k ? 'bg-orange-500/20 border-orange-400 text-white' : 'bg-zinc-800/60 border-zinc-700 text-zinc-400')}>{o.l}</button>))}</div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <label className="bg-zinc-800/60 rounded-xl p-3 block"><span className="text-xs text-zinc-400">{draft.type === 'hyrox' ? 'Finish time (h:mm:ss)' : 'Duration (mm:ss)'}</span>
+                <input value={timeText} onChange={(e) => { setTimeText(e.target.value); setDraft({ ...draft, duration_min: parseTime(e.target.value) }); }} placeholder={draft.type === 'hyrox' ? '1:25:00' : '60:00'} inputMode="numeric" className="w-full bg-transparent text-2xl font-semibold text-white outline-none placeholder:text-zinc-600" /></label>
+              <Num label="Avg HR" unit="bpm" value={draft.avg_hr} onChange={(v) => setDraft({ ...draft, avg_hr: v })} mode="numeric" />
+            </div>
+            <Rpe />
+            <textarea value={draft.notes ?? ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} placeholder={draft.type === 'hyrox' ? 'Station splits, what broke down…' : 'WOD / what you did…'} rows={2} className="w-full bg-zinc-800/60 rounded-xl p-3 text-sm text-white placeholder:text-zinc-600 outline-none resize-none" />
+          </div>
+        )}
+
+        {draft.type === 'gym' && draft.exercises && (
+          <div className="space-y-2">
+            {draft.exercises.map((ex, i) => {
+              const doneN = ex.done.filter(Boolean).length; const all = doneN === ex.target_sets;
+              const setEx = (patch: Partial<GymExercise>) => setDraft({ ...draft, exercises: draft.exercises!.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
               return (
-                <div key={s.week}>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className={cn('text-zinc-300', s.week === programInfo.week && 'text-blue-400 font-semibold')}>
-                      Week {s.week} {s.week <= 4 ? '(Build)' : '(Push)'}
-                    </span>
-                    <span className="text-zinc-400">{s.completed}/{s.total}</span>
-                  </div>
-                  <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-                    <div
-                      className={cn('h-full rounded-full transition-all', barColor)}
-                      style={{ width: `${pct}%` }}
-                    />
+                <div key={ex.name} className={cn('rounded-xl px-3 py-2.5 border', all ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-zinc-800/60 border-transparent')}>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0"><div className={cn('text-sm font-medium truncate', all ? 'text-emerald-300' : 'text-white')}>{ex.name}</div><div className="text-[11px] text-zinc-500">{ex.target_sets} × {ex.target_reps}</div></div>
+                    <div className="flex items-center gap-1 bg-zinc-900 rounded-lg px-2 h-10"><input type="number" inputMode="decimal" step="2.5" value={ex.weight ?? ''} placeholder="lbs" onChange={(e) => setEx({ weight: e.target.value === '' ? null : Number(e.target.value) })} className="w-14 bg-transparent text-white text-right outline-none placeholder:text-zinc-600" /><span className="text-xs text-zinc-500">lbs</span></div>
+                    <div className="flex gap-1">{ex.done.map((d, k) => (
+                      <button key={k} onClick={() => { const nd = [...ex.done]; nd[k] = !nd[k]; setEx({ done: nd }); if (navigator.vibrate) navigator.vibrate(10); }} className={cn('h-10 w-10 rounded-lg flex items-center justify-center text-xs font-semibold active:scale-95 transition', d ? 'bg-emerald-500 text-black' : 'bg-zinc-900 text-zinc-500 border border-zinc-700')}>{d ? <Check className="h-4 w-4" /> : k + 1}</button>))}</div>
                   </div>
                 </div>
               );
             })}
-          </div>
-        </Card>
-
-        {/* Month Calendar */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>
-                <Calendar className="h-4 w-4 inline mr-2 text-zinc-400" />
-                {(() => {
-                  const [yr, mo] = calendarMonth.split('-').map(Number);
-                  return new Date(yr, mo - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
-                })()}
-              </CardTitle>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const [yr, mo] = calendarMonth.split('-').map(Number);
-                    const d = new Date(yr, mo - 2, 1);
-                    setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-                  }}
-                  className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => {
-                    const d = new Date();
-                    setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-                  }}
-                  className="text-xs text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-800 transition-colors"
-                >
-                  Today
-                </button>
-                <button
-                  onClick={() => {
-                    const [yr, mo] = calendarMonth.split('-').map(Number);
-                    const d = new Date(yr, mo, 1);
-                    setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-                  }}
-                  className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <label className="bg-zinc-800/60 rounded-xl p-3 block"><span className="text-xs text-zinc-400">Duration (mm:ss)</span>
+                <input value={timeText} onChange={(e) => { setTimeText(e.target.value); setDraft({ ...draft, duration_min: parseTime(e.target.value) }); }} placeholder="45:00" inputMode="numeric" className="w-full bg-transparent text-2xl font-semibold text-white outline-none placeholder:text-zinc-600" /></label>
+              <Rpe />
             </div>
-          </CardHeader>
-          {(() => {
-            const [yr, mo] = calendarMonth.split('-').map(Number);
-            const firstDay = new Date(yr, mo - 1, 1);
-            const lastDay = new Date(yr, mo, 0);
-            const daysInMonth = lastDay.getDate();
-            // Week starts Monday (0=Mon…6=Sun)
-            const startDow = (firstDay.getDay() + 6) % 7;
-
-            const cells: (string | null)[] = [
-              ...Array(startDow).fill(null),
-              ...Array.from({ length: daysInMonth }, (_, i) => {
-                const d = new Date(yr, mo - 1, i + 1);
-                return d.toISOString().split('T')[0];
-              }),
-            ];
-            // Pad to complete last row
-            while (cells.length % 7 !== 0) cells.push(null);
-
-            const dowLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
-            return (
-              <div>
-                {/* Day-of-week headers */}
-                <div className="grid grid-cols-7 mb-1">
-                  {dowLabels.map((d, i) => (
-                    <div key={i} className="text-center text-[10px] text-zinc-600 font-medium py-1">{d}</div>
-                  ))}
-                </div>
-                {/* Calendar rows */}
-                <div className="grid grid-cols-7 gap-y-1">
-                  {cells.map((dateStr, i) => {
-                    if (!dateStr) {
-                      return <div key={i} />;
-                    }
-                    const dayNum = new Date(dateStr + 'T00:00:00').getDate();
-                    const isToday = dateStr === today;
-                    const isSelected = dateStr === selectedTrainingDate;
-                    const isCompleted = completedDates.has(dateStr);
-                    const isPast = dateStr < today;
-                    const isFuture = dateStr > today;
-
-                    // Program position for this date
-                    const diff = Math.floor(
-                      (new Date(dateStr + 'T00:00:00').getTime() - startDate.getTime()) / 86400000
-                    );
-                    const inProgram = diff >= 0 && diff < 56; // 8 weeks
-                    const progWeek = inProgram ? Math.floor(diff / 7) + 1 : null;
-                    const progDay = inProgram ? (diff % 7) + 1 : null;
-                    const isRestDay = inProgram && PROGRAM[(diff % 7)]?.exercises[0]?.type === 'rest';
-
-                    return (
-                      <button
-                        key={dateStr}
-                        onClick={() => {
-                          setSelectedTrainingDate(dateStr);
-                          setActiveTab('today');
-                        }}
-                        className={cn(
-                          'relative flex flex-col items-center rounded-lg py-1.5 px-0.5 transition-colors min-h-[52px] group',
-                          isSelected && 'ring-2 ring-blue-400',
-                          isToday && !isSelected && 'ring-1 ring-blue-600/60',
-                          isCompleted && 'bg-emerald-900/20',
-                          !isCompleted && isPast && inProgram && !isRestDay && 'bg-red-950/20',
-                          !inProgram && 'opacity-30',
-                          'hover:bg-zinc-800/60'
-                        )}
-                      >
-                        <span className={cn(
-                          'text-xs font-semibold leading-none',
-                          isToday ? 'text-blue-400' : isCompleted ? 'text-emerald-400' : isPast && inProgram && !isRestDay ? 'text-red-500' : isFuture ? 'text-zinc-500' : 'text-zinc-300'
-                        )}>
-                          {dayNum}
-                        </span>
-                        {inProgram && (
-                          <span className={cn(
-                            'text-[9px] leading-none mt-0.5',
-                            isRestDay ? 'text-zinc-600' : isCompleted ? 'text-emerald-600' : isPast ? 'text-red-800' : 'text-zinc-600'
-                          )}>
-                            {isRestDay ? 'rest' : `W${progWeek}D${progDay}`}
-                          </span>
-                        )}
-                        {isCompleted && (
-                          <span className="text-[10px] leading-none text-emerald-500 mt-0.5">✓</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })()}
-        </Card>
-
-        {/* Legend */}
-        <div className="flex flex-wrap gap-4 text-xs text-zinc-500">
-          <div className="flex items-center gap-1.5">
-            <div className="w-4 h-4 rounded bg-emerald-700/40" /> Completed
           </div>
-          <div className="flex items-center gap-1.5">
-            <div className="w-4 h-4 rounded bg-blue-600" /> Today
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="w-4 h-4 rounded bg-red-900/30" /> Missed
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="w-4 h-4 rounded bg-zinc-800/50" /> Future
-          </div>
-        </div>
-      </div>
+        )}
+
+        <button onClick={save} disabled={saving} className={cn('mt-4 w-full h-12 rounded-xl font-semibold text-black flex items-center justify-center gap-2 active:scale-[0.98] transition disabled:opacity-50', T.key === 'run' ? 'bg-sky-400' : T.key === 'crossfit' ? 'bg-orange-400' : T.key === 'gym' ? 'bg-violet-400' : 'bg-yellow-400')}>
+          <Check className="h-5 w-5" />{saving ? 'Saving…' : `Log ${T.label}`}
+        </button>
+      </Card>
     );
-  }
+  };
 
-  // ---------------------------------------------------------------------------
-  // Tab: HISTORY
-  // ---------------------------------------------------------------------------
-
-  function renderHistoryTab() {
-    if (historyDetail) {
-      const { workout, exercises: exs } = historyDetail;
-      const startedAt = workout.started_at ? new Date(workout.started_at) : null;
-      const completedAt = workout.completed_at ? new Date(workout.completed_at) : null;
-      const durationMin = startedAt && completedAt
-        ? Math.round((completedAt.getTime() - startedAt.getTime()) / 60000)
-        : null;
-      const programDay = PROGRAM[(workout.day_number - 1) % 7];
-
-      return (
-        <div className="space-y-4">
-          <button
-            onClick={() => setHistoryDetail(null)}
-            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white transition-colors min-h-[44px]"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Back to History
-          </button>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                {formatDate(workout.date)} — Week {workout.week_number}, {workout.day_name}
-              </CardTitle>
-            </CardHeader>
-            <div className="flex flex-wrap gap-4 text-sm text-zinc-400 mb-2">
-              <span className={cn(programDay?.color ?? 'text-zinc-400')}>{programDay?.focus}</span>
-              {durationMin && <span>{durationMin} min</span>}
-            </div>
-          </Card>
-
-          {exs.map((ex) => (
-            <Card key={ex.id}>
-              <CardHeader className="mb-2">
-                <CardTitle className="text-base">{ex.exercise_name}</CardTitle>
-              </CardHeader>
-              {ex.sets.length > 0 ? (
-                <div className="space-y-1">
-                  {ex.sets.map((set) => (
-                    <div key={set.id} className="flex items-center gap-3 text-sm py-1.5 border-b border-zinc-800/50 last:border-0">
-                      <span className="text-zinc-500 w-10">Set {set.set_number}</span>
-                      {set.actual_weight && (
-                        <span className="text-white font-medium">{set.actual_weight} lbs</span>
-                      )}
-                      {set.actual_reps && (
-                        <span className="text-zinc-300">× {set.actual_reps} reps</span>
-                      )}
-                      {set.time_seconds && (
-                        <span className="text-zinc-300">{formatTime(set.time_seconds)}</span>
-                      )}
-                      {set.notes && (
-                        <span className="text-zinc-500 text-xs ml-auto">{set.notes}</span>
-                      )}
-                      {set.is_completed && (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-500 ml-auto shrink-0" />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-zinc-600 text-sm">No sets logged.</p>
-              )}
-            </Card>
-          ))}
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Completed Workouts</CardTitle>
-          </CardHeader>
-          {historyWorkouts.length === 0 ? (
-            <p className="text-zinc-500 text-sm py-4 text-center">No completed workouts yet.</p>
-          ) : (
-            <div className="divide-y divide-zinc-800/60">
-              {historyWorkouts.map((w) => {
-                const startedAt = w.started_at ? new Date(w.started_at) : null;
-                const completedAt = w.completed_at ? new Date(w.completed_at) : null;
-                const durationMin = startedAt && completedAt
-                  ? Math.round((completedAt.getTime() - startedAt.getTime()) / 60000)
-                  : null;
-                const programDay = PROGRAM[(w.day_number - 1) % 7];
-
-                return (
-                  <button
-                    key={w.id}
-                    onClick={() => loadHistoryDetail(w)}
-                    className="w-full flex items-center justify-between py-3.5 px-1 hover:bg-zinc-800/30 rounded-lg transition-colors min-h-[52px] text-left"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium text-white">{formatDate(w.date)}</span>
-                        <span className="text-xs text-zinc-500">W{w.week_number} D{w.day_number}</span>
-                        {programDay && (
-                          <span className={cn('text-xs font-medium', programDay.color)}>
-                            {programDay.focus}
-                          </span>
-                        )}
-                      </div>
-                      {durationMin && (
-                        <div className="text-xs text-zinc-500 mt-0.5">{durationMin} min</div>
-                      )}
-                    </div>
-                    <ChevronRight className="h-4 w-4 text-zinc-600 shrink-0" />
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </Card>
-      </div>
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Main render
-  // ---------------------------------------------------------------------------
-
-  const tabs: { key: TabKey; label: string; icon: typeof Dumbbell }[] = [
-    { key: 'today', label: 'Today', icon: Zap },
-    { key: 'program', label: 'Program', icon: Calendar },
-    { key: 'history', label: 'History', icon: Trophy },
-  ];
-
+  // ------------------------------------------------------------------ render
   return (
-    <div className="space-y-5">
-      {/* PR toasts */}
-      {prToasts.length > 0 && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 space-y-2">
-          {prToasts.map((msg, i) => (
-            <div
-              key={i}
-              className="bg-amber-500 text-black px-5 py-2.5 rounded-xl font-bold text-sm shadow-xl text-center animate-bounce"
-            >
-              PR! {msg}
-            </div>
-          ))}
-        </div>
+    <div className="space-y-4">
+      {toast && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-zinc-800 border border-zinc-600 text-white px-4 py-2 rounded-xl text-sm shadow-lg">{toast}</div>}
+
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h1 className="text-2xl font-bold text-white flex items-center gap-3"><Zap className="h-7 w-7 text-yellow-400" />Training</h1>
+      </div>
+
+      {/* Date + type picker */}
+      {!draft && (
+        <Card>
+          <div className="flex items-center gap-1.5 mb-3">
+            <button onClick={() => setDate(shiftDate(date, -1))} className="h-10 w-10 rounded-lg bg-zinc-800 text-zinc-300 flex items-center justify-center"><ChevronLeft className="h-5 w-5" /></button>
+            <button onClick={() => setDate(getToday())} className="h-10 px-3 rounded-lg bg-zinc-800 text-white text-sm font-medium flex-1">{date === getToday() ? 'Today' : formatDate(date)}</button>
+            <button onClick={() => setDate(shiftDate(date, 1))} disabled={date >= getToday()} className="h-10 w-10 rounded-lg bg-zinc-800 text-zinc-300 flex items-center justify-center disabled:opacity-30"><ChevronRight className="h-5 w-5" /></button>
+          </div>
+          <div className="grid grid-cols-4 gap-2">{TYPES.map((t) => { const I = t.icon; const n = dateSessions.filter((s) => s.type === t.key).length; return (
+            <button key={t.key} onClick={() => start(t.key)} className={cn('relative h-20 rounded-xl border flex flex-col items-center justify-center gap-1.5 active:scale-95 transition', t.bg)}>
+              <I className={cn('h-6 w-6', t.color)} /><span className="text-xs font-medium text-white">{t.label}</span>
+              {n > 0 && <span className="absolute top-1.5 right-1.5 h-5 w-5 rounded-full bg-emerald-500 text-black text-[11px] font-bold flex items-center justify-center">{n}</span>}
+            </button>); })}</div>
+          {dateSessions.length > 0 && <div className="mt-3 space-y-1">{dateSessions.map((s) => { const T = typeOf(s.type); const I = T.icon; return (
+            <div key={s.id} className="flex items-center gap-2 text-sm bg-zinc-800/60 rounded-lg px-3 py-2"><I className={cn('h-4 w-4', T.color)} /><span className="text-white">{T.label}{s.subtype ? ` · ${RUN_SUBTYPES.find((r) => r.key === s.subtype)?.label ?? (s.subtype === 'hyrox_class' ? 'HYROX class' : '')}` : ''}</span><span className="text-zinc-400 ml-auto tabular-nums">{summary(s)}</span></div>); })}</div>}
+        </Card>
       )}
 
-      {/* Page header */}
-      <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-        <Dumbbell className="h-7 w-7 text-blue-500" />
-        Training
-      </h1>
+      {renderForm()}
 
-      {/* Tab bar */}
-      <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
-        {tabs.map((t) => {
-          const Icon = t.icon;
-          return (
-            <button
-              key={t.key}
-              onClick={() => {
-                setActiveTab(t.key);
-                if (t.key === 'history' || t.key === 'program') {
-                  fetchHistory();
-                }
-              }}
-              className={cn(
-                'flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex-1 justify-center whitespace-nowrap min-h-[44px]',
-                activeTab === t.key
-                  ? 'bg-blue-600 text-white'
-                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+      {/* This week */}
+      <Card>
+        <CardHeader className="mb-3 flex items-center justify-between"><CardTitle className="text-base flex items-center gap-2"><CalendarDays className="h-4 w-4 text-zinc-400" />This Week</CardTitle><span className="text-xs text-zinc-500">{thisWeek.length} session{thisWeek.length === 1 ? '' : 's'}</span></CardHeader>
+        <div className="grid grid-cols-7 gap-1">{weekDays.map((d) => { const ds = sessions.filter((s) => s.date === d); const future = d > getToday(); return (
+          <button key={d} onClick={() => !future && setDate(d)} disabled={future} className={cn('rounded-xl p-2 flex flex-col items-center gap-1 min-h-[64px]', d === getToday() ? 'bg-zinc-800 border border-zinc-600' : 'bg-zinc-800/40', future && 'opacity-40')}>
+            <span className={cn('text-[11px]', d === getToday() ? 'text-blue-400' : 'text-zinc-500')}>{shortDay(d)}</span>
+            <div className="flex flex-wrap justify-center gap-0.5">{ds.length ? ds.map((s) => { const T = typeOf(s.type); const I = T.icon; return <I key={s.id} className={cn('h-4 w-4', T.color)} />; }) : <span className="h-4 w-4 rounded-full border border-dashed border-zinc-700" />}</div>
+          </button>); })}</div>
+        <div className="grid grid-cols-4 gap-2 mt-3">{TYPES.map((t) => (
+          <div key={t.key} className="bg-zinc-800/40 rounded-lg p-2 text-center"><div className={cn('text-lg font-semibold', t.color)}>{countBy(thisWeek, t.key)}</div><div className="text-[10px] text-zinc-500">{t.label}</div></div>))}</div>
+        {runKm(thisWeek) > 0 && <div className="text-xs text-zinc-400 mt-2 text-center">{runKm(thisWeek).toFixed(1)} km run this week</div>}
+      </Card>
+
+      {/* Month + trends */}
+      <div className="grid grid-cols-2 gap-2">
+        {[
+          { l: 'Sessions this month', v: thisMonth.length },
+          { l: 'Run km this month', v: runKm(thisMonth).toFixed(1) },
+          { l: 'CrossFit classes', v: countBy(thisMonth, 'crossfit') },
+          { l: 'Gym sessions', v: countBy(thisMonth, 'gym') },
+        ].map((c) => <Card key={c.l} className="p-3"><div className="text-xs text-zinc-400">{c.l}</div><div className="text-2xl font-semibold text-white tabular-nums">{c.v}</div></Card>)}
+      </div>
+
+      <Card className="p-4">
+        <div className="text-sm font-medium text-white mb-2">Sessions per week</div>
+        {!weeklyVolume.length ? <p className="text-zinc-500 text-sm py-6 text-center">Log your first session above</p> : (
+          <div className="h-44"><ResponsiveContainer width="100%" height="100%"><BarChart data={weeklyVolume} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" /><XAxis dataKey="week" {...axis} /><YAxis {...axis} allowDecimals={false} /><Tooltip contentStyle={tip} />
+            {TYPES.map((t) => <Bar key={t.key} dataKey={t.key} stackId="a" fill={t.hex} name={t.label} />)}
+          </BarChart></ResponsiveContainer></div>)}
+      </Card>
+
+      {paceTrend.length > 1 && (
+        <Card className="p-4"><div className="text-sm font-medium text-white mb-2">Run pace (min/km)</div>
+          <div className="h-44"><ResponsiveContainer width="100%" height="100%"><LineChart data={paceTrend} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" /><XAxis dataKey="date" tickFormatter={shortDate} {...axis} /><YAxis domain={['auto', 'auto']} reversed {...axis} />
+            <Tooltip contentStyle={tip} labelFormatter={(v) => formatDate(String(v))} formatter={(v, n, p) => [n === 'pace' ? `${fmtPace(Number(v))} (${(p as { payload?: { km?: number } }).payload?.km} km)` : String(v), n === 'pace' ? 'Pace' : String(n)]} />
+            <Line type="monotone" dataKey="pace" stroke="#38bdf8" strokeWidth={2.5} dot={{ r: 3 }} />
+          </LineChart></ResponsiveContainer></div></Card>
+      )}
+
+      {liftTrend.length > 1 && (
+        <Card className="p-4"><div className="text-sm font-medium text-white mb-2">Gym weights (lbs)</div>
+          <div className="h-52"><ResponsiveContainer width="100%" height="100%"><LineChart data={liftTrend} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" /><XAxis dataKey="date" tickFormatter={shortDate} {...axis} /><YAxis domain={['auto', 'auto']} {...axis} /><Tooltip contentStyle={tip} labelFormatter={(v) => formatDate(String(v))} />
+            {DEFAULT_GYM_EXERCISES.map((e, i) => <Line key={e.name} type="monotone" dataKey={e.name} stroke={LIFT_COLORS[i]} strokeWidth={2} dot={false} connectNulls />)}
+          </LineChart></ResponsiveContainer></div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">{DEFAULT_GYM_EXERCISES.map((e, i) => <span key={e.name} className="text-[10px] text-zinc-400 flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ background: LIFT_COLORS[i] }} />{e.name}</span>)}</div>
+        </Card>
+      )}
+
+      {/* History */}
+      <Card>
+        <CardHeader className="mb-2"><CardTitle className="text-base">Recent</CardTitle></CardHeader>
+        {!sessions.length ? <p className="text-zinc-500 text-sm">Nothing logged yet.</p> : (
+          <div className="divide-y divide-zinc-800/60">{sessions.slice(0, 30).map((s) => { const T = typeOf(s.type); const I = T.icon; const open = expanded === s.id; return (
+            <div key={s.id}>
+              <button onClick={() => setExpanded(open ? null : s.id)} className="w-full flex items-center gap-3 py-2.5 text-left">
+                <div className={cn('h-9 w-9 rounded-lg border flex items-center justify-center shrink-0', T.bg)}><I className={cn('h-4 w-4', T.color)} /></div>
+                <div className="flex-1 min-w-0"><div className="text-sm text-white">{T.label}{s.type === 'run' && s.subtype ? ` · ${RUN_SUBTYPES.find((r) => r.key === s.subtype)?.label}` : s.subtype === 'hyrox_class' ? ' · HYROX class' : ''}</div><div className="text-xs text-zinc-500 truncate">{summary(s)}</div></div>
+                <div className="text-xs text-zinc-500 shrink-0">{shortDate(s.date)}</div>
+              </button>
+              {open && (
+                <div className="pb-3 pl-12 text-xs text-zinc-400 space-y-1">
+                  {s.type === 'gym' && s.exercises && <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">{s.exercises.map((e) => <div key={e.name} className="flex justify-between"><span>{e.name}</span><span className="text-zinc-300 tabular-nums">{e.weight ?? '—'} lbs · {e.done.filter(Boolean).length}/{e.target_sets}</span></div>)}</div>}
+                  {s.avg_hr && <div>Avg HR {s.avg_hr}{s.max_hr ? ` · Max ${s.max_hr}` : ''}</div>}
+                  {s.rpe && <div>RPE {s.rpe}</div>}
+                  {s.notes && <div className="text-zinc-300 whitespace-pre-wrap">{s.notes}</div>}
+                  <button onClick={() => remove(s.id)} className="text-red-400/80 hover:text-red-400 flex items-center gap-1 pt-1"><Trash2 className="h-3.5 w-3.5" />Delete</button>
+                </div>
               )}
-            >
-              <Icon className="h-4 w-4" />
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Tab content — swipe left/right on Today tab to navigate dates */}
-      <div
-        onTouchStart={(e) => {
-          if (activeTab !== 'today') return;
-          const t = e.touches[0];
-          swipeTouchStart.current = { x: t.clientX, y: t.clientY };
-        }}
-        onTouchEnd={(e) => {
-          if (activeTab !== 'today' || !swipeTouchStart.current) return;
-          const t = e.changedTouches[0];
-          const dx = t.clientX - swipeTouchStart.current.x;
-          const dy = t.clientY - swipeTouchStart.current.y;
-          swipeTouchStart.current = null;
-          // Only treat as horizontal swipe if dx dominates (not a scroll)
-          if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-          if (dx < 0) {
-            // Swipe left → next day
-            setSelectedTrainingDate((d) => shiftDate(d, 1));
-          } else {
-            // Swipe right → previous day
-            setSelectedTrainingDate((d) => shiftDate(d, -1));
-          }
-        }}
-      >
-        {activeTab === 'today' && renderTodayTab()}
-        {activeTab === 'program' && renderProgramTab()}
-        {activeTab === 'history' && renderHistoryTab()}
-      </div>
+            </div>); })}</div>)}
+      </Card>
     </div>
   );
 }
