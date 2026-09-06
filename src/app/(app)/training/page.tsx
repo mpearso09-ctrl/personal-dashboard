@@ -9,7 +9,7 @@ import { DEFAULT_GYM_EXERCISES } from '@/lib/types';
 import type { TrainingSession, SessionType, RunSubtype, GymExercise, MilestoneType, MilestoneEntry } from '@/lib/types';
 import {
   Zap, Footprints, Dumbbell, Flame, Check, ChevronLeft, ChevronRight,
-  Trash2, Plus, Minus, Trophy, CalendarDays, X,
+  Trash2, Plus, Minus, Trophy, CalendarDays, X, Sunset,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
@@ -21,9 +21,10 @@ const TYPES: { key: SessionType; label: string; icon: typeof Zap; color: string;
   { key: 'run', label: 'Run', icon: Footprints, color: 'text-sky-400', bg: 'bg-sky-500/15 border-sky-500/40', hex: '#38bdf8' },
   { key: 'crossfit', label: 'CrossFit', icon: Flame, color: 'text-orange-400', bg: 'bg-orange-500/15 border-orange-500/40', hex: '#fb923c' },
   { key: 'gym', label: 'Gym', icon: Dumbbell, color: 'text-violet-400', bg: 'bg-violet-500/15 border-violet-500/40', hex: '#a78bfa' },
-  { key: 'hyrox', label: 'HYROX', icon: Zap, color: 'text-yellow-400', bg: 'bg-yellow-500/15 border-yellow-500/40', hex: '#facc15' },
+  { key: 'walk', label: 'Walk', icon: Sunset, color: 'text-emerald-400', bg: 'bg-emerald-500/15 border-emerald-500/40', hex: '#34d399' },
 ];
-const typeOf = (k: SessionType) => TYPES.find((t) => t.key === k)!;
+const LEGACY_HYROX = { key: 'hyrox' as SessionType, label: 'HYROX', icon: Zap, color: 'text-yellow-400', bg: 'bg-yellow-500/15 border-yellow-500/40', hex: '#facc15' };
+const typeOf = (k: SessionType) => TYPES.find((t) => t.key === k) ?? LEGACY_HYROX;
 
 const RUN_SUBTYPES: { key: RunSubtype; label: string; hint: string }[] = [
   { key: 'distance', label: 'Distance', hint: '5K · 10K · 15K' },
@@ -57,6 +58,7 @@ function summary(s: TrainingSession): string {
     if (s.subtype === 'sprints') return `${s.rounds ?? '—'} sprints${s.distance_km ? ` · ${s.distance_km} km` : ''}`;
     return `${s.distance_km ?? '—'} km · ${fmtTime(s.duration_min)} · ${fmtPace(pace(s.duration_min, s.distance_km))}`;
   }
+  if (s.type === 'walk') return `${s.distance_km ?? '—'} km · ${fmtTime(s.duration_min)}${s.avg_hr ? ` · ${s.avg_hr} bpm` : ''}`;
   if (s.type === 'gym') { const ex = s.exercises ?? []; const done = ex.reduce((a, e) => a + e.done.filter(Boolean).length, 0); const tot = ex.reduce((a, e) => a + e.target_sets, 0); return `${done}/${tot} sets`; }
   return `${s.duration_min ? fmtTime(s.duration_min) : '—'}${s.rpe ? ` · RPE ${s.rpe}` : ''}${s.subtype === 'hyrox_class' ? ' · HYROX class' : ''}`;
 }
@@ -132,10 +134,11 @@ export default function TrainingPage() {
     const payload = { ...draft, user_id: user.id, duration_min: draft.duration_min ?? parseTime(timeText) };
     const { error } = await supabase.from('training_sessions').insert(payload);
     if (error) { setSaving(false); setToast('Save failed'); setTimeout(() => setToast(null), 2500); return; }
-    // mark the day's workout toggle
+    // mark the day's workout toggle (walks also tick evening_walk)
+    const flags = draft.type === 'walk' ? { workout: true, evening_walk: true } : { workout: true };
     const { data: fd } = await supabase.from('fitness_daily').select('id').eq('user_id', user.id).eq('date', draft.date).maybeSingle();
-    if (fd) await supabase.from('fitness_daily').update({ workout: true }).eq('id', fd.id);
-    else await supabase.from('fitness_daily').insert({ user_id: user.id, date: draft.date, workout: true });
+    if (fd) await supabase.from('fitness_daily').update(flags).eq('id', fd.id);
+    else await supabase.from('fitness_daily').insert({ user_id: user.id, date: draft.date, ...flags });
     // auto-PR for distance runs
     let pr = false;
     if (draft.type === 'run' && draft.subtype === 'distance' && payload.duration_min && draft.distance_km) {
@@ -182,7 +185,7 @@ export default function TrainingPage() {
   }, [sessions]);
   const weeklyVolume = useMemo(() => {
     const m = new Map<string, Record<SessionType, number>>();
-    sessions.forEach((s) => { const k = mondayOf(s.date); const w = m.get(k) ?? { run: 0, crossfit: 0, gym: 0, hyrox: 0 }; w[s.type]++; m.set(k, w); });
+    sessions.forEach((s) => { const k = mondayOf(s.date); const w = m.get(k) ?? { run: 0, crossfit: 0, gym: 0, walk: 0, hyrox: 0 }; w[s.type]++; m.set(k, w); });
     return [...m.entries()].sort().slice(-8).map(([k, w]) => ({ week: shortDate(k), ...w }));
   }, [sessions]);
   const dateSessions = sessions.filter((s) => s.date === date);
@@ -259,6 +262,20 @@ export default function TrainingPage() {
           </div>
         )}
 
+        {draft.type === 'walk' && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <Num label="Distance" unit="km" step="0.1" value={draft.distance_km} onChange={(v) => setDraft({ ...draft, distance_km: v })} />
+              <label className="bg-zinc-800/60 rounded-xl p-3 block"><span className="text-xs text-zinc-400">Time (mm:ss)</span>
+                <input value={timeText} onChange={(e) => { setTimeText(e.target.value); setDraft({ ...draft, duration_min: parseTime(e.target.value) }); }} placeholder="35:00" inputMode="numeric" className="w-full bg-transparent text-2xl font-semibold text-white outline-none placeholder:text-zinc-600" /></label>
+              <Num label="Avg HR" unit="bpm" value={draft.avg_hr} onChange={(v) => setDraft({ ...draft, avg_hr: v })} mode="numeric" />
+              <div className="bg-zinc-900/60 rounded-xl p-3 text-sm flex flex-col justify-center"><span className="text-xs text-zinc-400">Pace</span><span className="text-white font-semibold tabular-nums">{fmtPace(pace(draft.duration_min, draft.distance_km))}</span></div>
+            </div>
+            <textarea value={draft.notes ?? ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} placeholder="Route, who with…" rows={2} className="w-full bg-zinc-800/60 rounded-xl p-3 text-sm text-white placeholder:text-zinc-600 outline-none resize-none" />
+            <div className="text-xs text-emerald-400/80">Logging this also ticks Workout and Evening Walk on your Fitness page.</div>
+          </div>
+        )}
+
         {draft.type === 'gym' && draft.exercises && (
           <div className="space-y-2">
             {draft.exercises.map((ex, i) => {
@@ -283,7 +300,7 @@ export default function TrainingPage() {
           </div>
         )}
 
-        <button onClick={save} disabled={saving} className={cn('mt-4 w-full h-12 rounded-xl font-semibold text-black flex items-center justify-center gap-2 active:scale-[0.98] transition disabled:opacity-50', T.key === 'run' ? 'bg-sky-400' : T.key === 'crossfit' ? 'bg-orange-400' : T.key === 'gym' ? 'bg-violet-400' : 'bg-yellow-400')}>
+        <button onClick={save} disabled={saving} className={cn('mt-4 w-full h-12 rounded-xl font-semibold text-black flex items-center justify-center gap-2 active:scale-[0.98] transition disabled:opacity-50', T.key === 'run' ? 'bg-sky-400' : T.key === 'crossfit' ? 'bg-orange-400' : T.key === 'gym' ? 'bg-violet-400' : T.key === 'walk' ? 'bg-emerald-400' : 'bg-yellow-400')}>
           <Check className="h-5 w-5" />{saving ? 'Saving…' : `Log ${T.label}`}
         </button>
       </Card>
@@ -338,7 +355,7 @@ export default function TrainingPage() {
           { l: 'Sessions this month', v: thisMonth.length },
           { l: 'Run km this month', v: runKm(thisMonth).toFixed(1) },
           { l: 'CrossFit classes', v: countBy(thisMonth, 'crossfit') },
-          { l: 'Gym sessions', v: countBy(thisMonth, 'gym') },
+          { l: 'Walks', v: countBy(thisMonth, 'walk') },
         ].map((c) => <Card key={c.l} className="p-3"><div className="text-xs text-zinc-400">{c.l}</div><div className="text-2xl font-semibold text-white tabular-nums">{c.v}</div></Card>)}
       </div>
 
