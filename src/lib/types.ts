@@ -305,7 +305,7 @@ export const REP_MAXES = [1, 2, 3, 4, 5, 10] as const;
 
 // ---- Training Sessions (per-user logger) ----
 
-export type SessionType = 'run' | 'crossfit' | 'gym' | 'hyrox';
+export type SessionType = 'run' | 'crossfit' | 'gym' | 'walk' | 'hyrox';
 export type RunSubtype = 'sprints' | 'vo2' | 'distance';
 
 export interface GymExercise {
