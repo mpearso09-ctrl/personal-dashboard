@@ -62,6 +62,28 @@ function summary(s: TrainingSession): string {
 }
 
 // ---------------------------------------------------------------------------
+// Inputs (module-level so they keep focus between keystrokes)
+// ---------------------------------------------------------------------------
+
+function Num({ label, value, onChange, unit, step = '1', mode = 'decimal' }: { label: string; value: number | null; onChange: (v: number | null) => void; unit?: string; step?: string; mode?: 'decimal' | 'numeric' }) {
+  return (
+    <label className="bg-zinc-800/60 rounded-xl p-3 block">
+      <span className="text-xs text-zinc-400">{label}</span>
+      <div className="flex items-baseline gap-1"><input type="number" inputMode={mode} step={step} value={value ?? ''} placeholder="—" onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))} className="w-full bg-transparent text-2xl font-semibold text-white tabular-nums outline-none placeholder:text-zinc-600" />{unit && <span className="text-zinc-500 text-sm">{unit}</span>}</div>
+    </label>
+  );
+}
+
+function Rpe({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
+  return (
+    <div className="bg-zinc-800/60 rounded-xl p-3"><span className="text-xs text-zinc-400">Effort (RPE)</span>
+      <div className="grid grid-cols-10 gap-1 mt-2">{Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+        <button key={n} onClick={() => onChange(value === n ? null : n)} className={cn('h-10 rounded-lg text-sm font-medium', value === n ? (n >= 8 ? 'bg-red-500 text-white' : n >= 5 ? 'bg-amber-500 text-black' : 'bg-emerald-500 text-black') : 'bg-zinc-900 text-zinc-400')}>{n}</button>))}</div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -170,19 +192,6 @@ export default function TrainingPage() {
 
   const tip = { backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 8, fontSize: 12 };
   const axis = { stroke: '#52525b', fontSize: 11 };
-  const Num = ({ label, value, onChange, unit, step = '1', mode = 'decimal' as 'decimal' | 'numeric' }: { label: string; value: number | null; onChange: (v: number | null) => void; unit?: string; step?: string; mode?: 'decimal' | 'numeric' }) => (
-    <label className="bg-zinc-800/60 rounded-xl p-3 block">
-      <span className="text-xs text-zinc-400">{label}</span>
-      <div className="flex items-baseline gap-1"><input type="number" inputMode={mode} step={step} value={value ?? ''} placeholder="—" onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))} className="w-full bg-transparent text-2xl font-semibold text-white tabular-nums outline-none placeholder:text-zinc-600" />{unit && <span className="text-zinc-500 text-sm">{unit}</span>}</div>
-    </label>
-  );
-  const Rpe = () => draft && (
-    <div className="bg-zinc-800/60 rounded-xl p-3"><span className="text-xs text-zinc-400">Effort (RPE)</span>
-      <div className="grid grid-cols-10 gap-1 mt-2">{Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-        <button key={n} onClick={() => setDraft({ ...draft, rpe: draft.rpe === n ? null : n })} className={cn('h-10 rounded-lg text-sm font-medium', draft.rpe === n ? (n >= 8 ? 'bg-red-500 text-white' : n >= 5 ? 'bg-amber-500 text-black' : 'bg-emerald-500 text-black') : 'bg-zinc-900 text-zinc-400')}>{n}</button>))}</div>
-    </div>
-  );
-
   // ------------------------------------------------------------------ form
   const renderForm = () => {
     if (!draft) return null;
@@ -230,7 +239,7 @@ export default function TrainingPage() {
                 <Num label="Max HR" unit="bpm" value={draft.max_hr} onChange={(v) => setDraft({ ...draft, max_hr: v })} mode="numeric" />
               </div>
             )}
-            <Rpe />
+            <Rpe value={draft.rpe} onChange={(v) => setDraft({ ...draft, rpe: v })} />
           </div>
         )}
 
@@ -245,7 +254,7 @@ export default function TrainingPage() {
                 <input value={timeText} onChange={(e) => { setTimeText(e.target.value); setDraft({ ...draft, duration_min: parseTime(e.target.value) }); }} placeholder={draft.type === 'hyrox' ? '1:25:00' : '60:00'} inputMode="numeric" className="w-full bg-transparent text-2xl font-semibold text-white outline-none placeholder:text-zinc-600" /></label>
               <Num label="Avg HR" unit="bpm" value={draft.avg_hr} onChange={(v) => setDraft({ ...draft, avg_hr: v })} mode="numeric" />
             </div>
-            <Rpe />
+            <Rpe value={draft.rpe} onChange={(v) => setDraft({ ...draft, rpe: v })} />
             <textarea value={draft.notes ?? ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} placeholder={draft.type === 'hyrox' ? 'Station splits, what broke down…' : 'WOD / what you did…'} rows={2} className="w-full bg-zinc-800/60 rounded-xl p-3 text-sm text-white placeholder:text-zinc-600 outline-none resize-none" />
           </div>
         )}
@@ -269,7 +278,7 @@ export default function TrainingPage() {
             <div className="grid grid-cols-2 gap-2 pt-1">
               <label className="bg-zinc-800/60 rounded-xl p-3 block"><span className="text-xs text-zinc-400">Duration (mm:ss)</span>
                 <input value={timeText} onChange={(e) => { setTimeText(e.target.value); setDraft({ ...draft, duration_min: parseTime(e.target.value) }); }} placeholder="45:00" inputMode="numeric" className="w-full bg-transparent text-2xl font-semibold text-white outline-none placeholder:text-zinc-600" /></label>
-              <Rpe />
+              <Rpe value={draft.rpe} onChange={(v) => setDraft({ ...draft, rpe: v })} />
             </div>
           </div>
         )}
