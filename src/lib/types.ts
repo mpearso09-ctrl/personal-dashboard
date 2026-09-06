@@ -303,6 +303,47 @@ export const DEFAULT_CARDIO_MILESTONES: { name: string; unit: 'seconds' | 'pace'
 
 export const REP_MAXES = [1, 2, 3, 4, 5, 10] as const;
 
+// ---- Training Sessions (per-user logger) ----
+
+export type SessionType = 'run' | 'crossfit' | 'gym' | 'hyrox';
+export type RunSubtype = 'sprints' | 'vo2' | 'distance';
+
+export interface GymExercise {
+  name: string;
+  target_sets: number;
+  target_reps: number;
+  weight: number | null;
+  done: boolean[];
+}
+
+export interface TrainingSession {
+  id: string;
+  user_id: string;
+  date: string;
+  type: SessionType;
+  subtype: string | null;
+  duration_min: number | null;
+  distance_km: number | null;
+  avg_hr: number | null;
+  max_hr: number | null;
+  rpe: number | null;
+  rounds: number | null;
+  work_sec: number | null;
+  rest_sec: number | null;
+  exercises: GymExercise[] | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export const DEFAULT_GYM_EXERCISES: { name: string; milestone?: string }[] = [
+  { name: 'Bench Press', milestone: 'Bench Press' },
+  { name: 'Lat Pulldown' },
+  { name: 'Barbell Back Squat', milestone: 'Squat' },
+  { name: 'Overhead DB Press' },
+  { name: 'DB Bicep Curl' },
+  { name: 'Cable Rope Crunch' },
+];
+
 // ---- Training Program (per-user) ----
 
 export interface TrainingProgramSettings {
