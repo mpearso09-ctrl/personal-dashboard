@@ -486,6 +486,15 @@ function FinanceSection({ householdId }: { householdId: string }) {
       // Build last 6 month boundaries for net worth history + flow
       const monthBoundaries = Array.from({ length: 6 }, (_, i) => monthRange(5 - i));
 
+      // Personal-only: business-tagged budget/income categories are excluded from the dashboard
+      const [bCatRes, iCatRes] = await Promise.all([
+        supabase.from('budget_categories').select('id, scope').eq('household_id', householdId),
+        supabase.from('income_categories').select('id, scope').eq('household_id', householdId),
+      ]);
+      const personalBudgetIds = new Set((bCatRes.data ?? []).filter((c) => (c.scope ?? 'personal') === 'personal').map((c) => c.id));
+      const personalIncomeIds = new Set((iCatRes.data ?? []).filter((c) => (c.scope ?? 'personal') === 'personal').map((c) => c.id));
+      const sumPersonal = (rows: { amount: number; category_id: string }[] | null, ids: Set<string>) => (rows ?? []).filter((r) => ids.has(r.category_id)).reduce((s, e) => s + Number(e.amount), 0);
+
       const [
         budgetRes,
         incomeRes,
@@ -496,18 +505,18 @@ function FinanceSection({ householdId }: { householdId: string }) {
         nwEntriesRes,
         nwItemsRes,
       ] = await Promise.all([
-        supabase.from('budget_daily').select('amount').eq('household_id', householdId).gte('date', monthStart).lte('date', monthEnd),
-        supabase.from('income_daily').select('amount').eq('household_id', householdId).gte('date', monthStart).lte('date', monthEnd),
-        supabase.from('budget_daily').select('amount').eq('household_id', householdId).gte('date', prevMonthStart).lte('date', prevMonthEnd),
-        supabase.from('income_daily').select('amount').eq('household_id', householdId).gte('date', prevMonthStart).lte('date', prevMonthEnd),
+        supabase.from('budget_daily').select('amount, category_id').eq('household_id', householdId).gte('date', monthStart).lte('date', monthEnd),
+        supabase.from('income_daily').select('amount, category_id').eq('household_id', householdId).gte('date', monthStart).lte('date', monthEnd),
+        supabase.from('budget_daily').select('amount, category_id').eq('household_id', householdId).gte('date', prevMonthStart).lte('date', prevMonthEnd),
+        supabase.from('income_daily').select('amount, category_id').eq('household_id', householdId).gte('date', prevMonthStart).lte('date', prevMonthEnd),
         supabase.from('accounts').select('*').eq('household_id', householdId).order('sort_order'),
         supabase.from('account_balances').select('*').eq('household_id', householdId).order('date', { ascending: false }),
         supabase.from('net_worth_entries').select('*, net_worth_items(type)').eq('household_id', householdId).order('month', { ascending: false }),
         supabase.from('net_worth_items').select('*').eq('household_id', householdId),
       ]);
 
-      const moneyOut = (budgetRes.data ?? []).reduce((s, e) => s + Number(e.amount), 0);
-      const moneyIn = (incomeRes.data ?? []).reduce((s, e) => s + Number(e.amount), 0);
+      const moneyOut = sumPersonal(budgetRes.data, personalBudgetIds);
+      const moneyIn = sumPersonal(incomeRes.data, personalIncomeIds);
 
       // Net worth computation helper
       type NWEntry = NetWorthEntry & { net_worth_items: { type: string } | null };
@@ -552,13 +561,13 @@ function FinanceSection({ householdId }: { householdId: string }) {
         [2, 1, 0].map(async (i) => {
           const { start, end } = monthRange(i);
           const [bRes, iRes] = await Promise.all([
-            supabase.from('budget_daily').select('amount').eq('household_id', householdId).gte('date', start).lte('date', end),
-            supabase.from('income_daily').select('amount').eq('household_id', householdId).gte('date', start).lte('date', end),
+            supabase.from('budget_daily').select('amount, category_id').eq('household_id', householdId).gte('date', start).lte('date', end),
+            supabase.from('income_daily').select('amount, category_id').eq('household_id', householdId).gte('date', start).lte('date', end),
           ]);
           return {
             month: monthLabel(i),
-            income: (iRes.data ?? []).reduce((s, e) => s + Number(e.amount), 0),
-            spending: (bRes.data ?? []).reduce((s, e) => s + Number(e.amount), 0),
+            income: sumPersonal(iRes.data, personalIncomeIds),
+            spending: sumPersonal(bRes.data, personalBudgetIds),
           };
         }),
       );
