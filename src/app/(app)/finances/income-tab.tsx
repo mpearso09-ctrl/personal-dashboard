@@ -143,6 +143,11 @@ export function IncomeTab({
     await loadYearEntries();
   };
 
+  const setCategoryScope = async (catId: string, scope: 'personal' | 'business') => {
+    await supabase.from('income_categories').update({ scope }).eq('id', catId);
+    await loadCategories();
+  };
+
   const renameCategory = async (catId: string, newName: string) => {
     await supabase.from('income_categories').update({ name: newName }).eq('id', catId);
     await loadCategories();
@@ -253,6 +258,14 @@ export function IncomeTab({
                   />
                   {canEdit && (
                     <>
+                      <select
+                        value={cat.scope ?? 'personal'}
+                        onChange={(e) => setCategoryScope(cat.id, e.target.value as 'personal' | 'business')}
+                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300 mr-2 min-h-[36px]"
+                      >
+                        <option value="personal">Personal</option>
+                        <option value="business">Business</option>
+                      </select>
                       {deleteConfirm === cat.id ? (
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-red-400">Delete?</span>
