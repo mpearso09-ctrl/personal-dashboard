@@ -88,6 +88,7 @@ export interface BudgetCategory {
   /** The entered amount in the given frequency. Use monthlyEquiv() to get the monthly value. */
   monthly_amount: number;
   frequency: 'monthly' | 'weekly' | 'biweekly' | 'annual';
+  scope?: 'personal' | 'business';
   sort_order: number;
   created_at: string;
 }
@@ -184,6 +185,7 @@ export interface IncomeCategory {
   id: string;
   household_id: string;
   name: string;
+  scope?: 'personal' | 'business';
   sort_order: number;
   created_at: string;
 }
