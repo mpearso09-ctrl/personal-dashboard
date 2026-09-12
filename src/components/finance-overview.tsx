@@ -26,7 +26,7 @@ import {
   BarChart3, ArrowUpRight, ArrowDownRight, Receipt, PiggyBank,
 } from 'lucide-react';
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── Constants ───────────────────────────────────────────────────────────────────
 
 const TIME_RANGES = [
   { label: 'Last 2 Months', value: '2m' },
@@ -64,7 +64,8 @@ const ACCOUNT_COLORS = [
 
 const CASH_VIEWS = [
   { label: 'Total', value: 'total' },
-  { label: 'Business / Personal', value: 'scope' },
+  { label: 'Personal', value: 'personal' },
+  { label: 'Business', value: 'business' },
   { label: 'By Type', value: 'type' },
 ] as const;
 type CashView = (typeof CASH_VIEWS)[number]['value'];
@@ -76,7 +77,7 @@ const TYPE_LABELS: Record<AccountType, string> = {
   investments: 'Investments',
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────────
 
 function getStartDate(range: TimeRange): string {
   const now = new Date();
@@ -122,7 +123,7 @@ function getYesterday(): string {
   return d.toISOString().split('T')[0];
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
+// ─── Component ───────────────────────────────────────────────────────────────────
 
 export default function FinanceOverview({ householdId }: { householdId: string }) {
   const supabase = createClient();
@@ -143,7 +144,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
   const [timeRange, setTimeRange] = useState<TimeRange>('2m');
   const [granularity, setGranularity] = useState<Granularity>('Monthly');
   const [chartView, setChartView] = useState<ChartView>('income_vs_spending');
-  const [cashView, setCashView] = useState<CashView>('total');
+  const [cashView, setCashView] = useState<CashView>('personal');
 
   // account_id → account (for currency/scope/type lookups)
   const accountById = useMemo(() => {
@@ -199,25 +200,34 @@ export default function FinanceOverview({ householdId }: { householdId: string }
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // ── View scoping: Personal / Business filters categories, entries and accounts; Total / By Type = everything ──
+  const scopeFilter: AccountScope | null = cashView === 'personal' || cashView === 'business' ? cashView : null;
+  const categoriesV = useMemo(() => categories.filter((c) => !scopeFilter || (c.scope ?? 'personal') === scopeFilter), [categories, scopeFilter]);
+  const budgetEntriesV = useMemo(() => { const ids = new Set(categoriesV.map((c) => c.id)); return budgetEntries.filter((e) => ids.has(e.category_id)); }, [budgetEntries, categoriesV]);
+  const incomeEntriesV = useMemo(() => { const ids = new Set(incomeCategories.filter((c) => !scopeFilter || (c.scope ?? 'personal') === scopeFilter).map((c) => c.id)); return incomeEntries.filter((e) => ids.has(e.category_id)); }, [incomeEntries, incomeCategories, scopeFilter]);
+  const scopedAccountIds = useMemo(() => new Set(accounts.filter((a) => !scopeFilter || (a.scope ?? 'personal') === scopeFilter).map((a) => a.id)), [accounts, scopeFilter]);
+  const balancesV = useMemo(() => balances.filter((b) => scopedAccountIds.has(b.account_id)), [balances, scopedAccountIds]);
+  const scopeLabel = scopeFilter ? SCOPE_LABELS[scopeFilter] : 'All';
+
   // ── Derived: Summary Card Values ──
 
   const monthlySpending = useMemo(() => {
-    return budgetEntries
+    return budgetEntriesV
       .filter((e) => e.date >= monthStart && e.date <= today)
       .reduce((s, e) => s + Number(e.amount), 0);
-  }, [budgetEntries, monthStart, today]);
+  }, [budgetEntriesV, monthStart, today]);
 
   const monthlyBudget = useMemo(() => {
-    return categories.reduce((s, c) => s + c.monthly_amount, 0);
-  }, [categories]);
+    return categoriesV.reduce((s, c) => s + c.monthly_amount, 0);
+  }, [categoriesV]);
 
   const budgetVariance = monthlyBudget - monthlySpending;
 
   const monthlyIncome = useMemo(() => {
-    return incomeEntries
+    return incomeEntriesV
       .filter((e) => e.date >= monthStart && e.date <= today)
       .reduce((s, e) => s + Number(e.amount), 0);
-  }, [incomeEntries, monthStart, today]);
+  }, [incomeEntriesV, monthStart, today]);
 
   const surplusDeficit = monthlyIncome - monthlySpending;
 
@@ -310,13 +320,13 @@ export default function FinanceOverview({ householdId }: { householdId: string }
     const labelFn = granularity === 'Weekly' ? getWeekLabel : getMonthLabel;
 
     const spendGroups: Record<string, number> = {};
-    for (const e of budgetEntries.filter((e) => e.date >= startDate && e.date <= today)) {
+    for (const e of budgetEntriesV.filter((e) => e.date >= startDate && e.date <= today)) {
       const key = groupKey(e.date);
       spendGroups[key] = (spendGroups[key] || 0) + Number(e.amount);
     }
 
     const incomeGroups: Record<string, number> = {};
-    for (const e of incomeEntries.filter((e) => e.date >= startDate && e.date <= today)) {
+    for (const e of incomeEntriesV.filter((e) => e.date >= startDate && e.date <= today)) {
       const key = groupKey(e.date);
       incomeGroups[key] = (incomeGroups[key] || 0) + Number(e.amount);
     }
@@ -327,17 +337,17 @@ export default function FinanceOverview({ householdId }: { householdId: string }
       Income: Math.round(incomeGroups[key] || 0),
       Spending: Math.round(spendGroups[key] || 0),
     }));
-  }, [budgetEntries, incomeEntries, granularity, startDate, today]);
+  }, [budgetEntriesV, incomeEntriesV, granularity, startDate, today]);
 
   const spendingPieData = useMemo(() => {
     const totals: Record<string, number> = {};
-    for (const e of budgetEntries.filter((e) => e.date >= startDate && e.date <= today)) {
+    for (const e of budgetEntriesV.filter((e) => e.date >= startDate && e.date <= today)) {
       totals[e.category_id] = (totals[e.category_id] || 0) + Number(e.amount);
     }
     return categories
       .map((c) => ({ name: c.name, value: Math.round(totals[c.id] || 0), fill: catColorMap[c.id] }))
       .filter((d) => d.value > 0);
-  }, [budgetEntries, categories, catColorMap, startDate, today]);
+  }, [budgetEntriesV, categories, catColorMap, startDate, today]);
 
   const netWorthChartData = useMemo(() => {
     const months = [...new Set(nwEntries.map((e) => e.month))].sort();
@@ -358,7 +368,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
     const labelFn = granularity === 'Weekly' ? getWeekLabel : getMonthLabel;
     const groups: Record<string, Record<string, number>> = {};
 
-    for (const b of balances) {
+    for (const b of balancesV) {
       const key = groupKey(b.date);
       if (!groups[key]) groups[key] = {};
       groups[key][b.account_id] = rawToCad(b.account_id, Number(b.balance));
@@ -370,14 +380,14 @@ export default function FinanceOverview({ householdId }: { householdId: string }
         period: labelFn(key),
         total: Object.values(accBals).reduce((s, v) => s + v, 0),
       }));
-  }, [balances, granularity, rawToCad]);
+  }, [balancesV, granularity, rawToCad]);
 
   const accountBalancesChartData = useMemo(() => {
     const groupKey = granularity === 'Weekly' ? getMondayOfWeek : (d: string) => d.slice(0, 7) + '-01';
     const labelFn = granularity === 'Weekly' ? getWeekLabel : getMonthLabel;
     const groups: Record<string, Record<string, number>> = {};
 
-    for (const b of balances) {
+    for (const b of balancesV) {
       const key = groupKey(b.date);
       if (!groups[key]) groups[key] = {};
       const accName = accounts.find((a) => a.id === b.account_id)?.name ?? b.account_id;
@@ -387,7 +397,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
     return Object.entries(groups)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, accBals]) => ({ period: labelFn(key), ...accBals }));
-  }, [balances, accounts, granularity, rawToCad]);
+  }, [balancesV, accounts, granularity, rawToCad]);
 
   const debtPaydownData = useMemo(() => {
     const liabilityItems = nwItems.filter((i) => i.type === 'liability');
@@ -441,8 +451,8 @@ export default function FinanceOverview({ householdId }: { householdId: string }
 
   // Budget vs actual summary table
   const budgetSummary = useMemo(() => {
-    return categories.map((cat) => {
-      const spent = budgetEntries
+    return categoriesV.map((cat) => {
+      const spent = budgetEntriesV
         .filter((e) => e.category_id === cat.id && e.date >= monthStart && e.date <= today)
         .reduce((s, e) => s + Number(e.amount), 0);
       const budget = cat.monthly_amount;
@@ -450,7 +460,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
       const pctUsed = budget > 0 ? (spent / budget) * 100 : 0;
       return { name: cat.name, spent, budget, variance, pctUsed, color: catColorMap[cat.id] };
     });
-  }, [categories, budgetEntries, monthStart, today, catColorMap]);
+  }, [categoriesV, budgetEntriesV, monthStart, today, catColorMap]);
 
   // Savings accounts for chart
   const savingsAccountNames = useMemo(() => {
@@ -476,7 +486,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
           label="Monthly Spending"
           value={formatCurrency(monthlySpending)}
           valueColor="text-white"
-          subtitle={`${new Date(monthStart + 'T00:00:00').toLocaleDateString('en-CA', { month: 'long' })}`}
+          subtitle={`${new Date(monthStart + 'T00:00:00').toLocaleDateString('en-CA', { month: 'long' })} · ${scopeLabel}`}
         />
         <SummaryCard
           icon={<DollarSign size={16} />}
@@ -495,7 +505,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
           label="Monthly Income"
           value={formatCurrency(monthlyIncome)}
           valueColor="text-white"
-          subtitle={`${new Date(monthStart + 'T00:00:00').toLocaleDateString('en-CA', { month: 'long' })}`}
+          subtitle={`${new Date(monthStart + 'T00:00:00').toLocaleDateString('en-CA', { month: 'long' })} · ${scopeLabel}`}
         />
         <SummaryCard
           icon={surplusDeficit >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
@@ -546,41 +556,27 @@ export default function FinanceOverview({ householdId }: { householdId: string }
                     </button>
                   ))}
                 </div>
-                <span className="text-lg font-bold text-white">{formatCurrency(totalCash)}</span>
+                <span className="text-lg font-bold text-white">{formatCurrency(scopeFilter ? cashSubtotals.byScope[scopeFilter] : totalCash)}</span>
               </div>
             </CardTitle>
           </CardHeader>
-          {cashView === 'total' ? (
-            <AccountRows rows={accountBalancesList} />
-          ) : (
+          {cashView === 'type' ? (
             <div className="space-y-4">
-              {(cashView === 'scope'
-                ? (['business', 'personal'] as const).map((s) => ({
-                    label: SCOPE_LABELS[s],
-                    rows: accountBalancesList.filter((a) => a.scope === s),
-                    subtotal: cashSubtotals.byScope[s],
-                  }))
-                : (['chequing', 'savings', 'investments'] as const).map((t) => ({
-                    label: TYPE_LABELS[t],
-                    rows: accountBalancesList.filter((a) => a.account_type === t),
-                    subtotal: cashSubtotals.byType[t],
-                  }))
-              )
+              {(['chequing', 'savings', 'investments'] as const)
+                .map((t) => ({ label: TYPE_LABELS[t], rows: accountBalancesList.filter((a) => a.account_type === t), subtotal: cashSubtotals.byType[t] }))
                 .filter((g) => g.rows.length > 0)
                 .map((g) => (
                   <div key={g.label}>
                     <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800/60 rounded-lg mb-1">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                        {g.label}
-                      </span>
-                      <span className="text-sm font-bold text-white tabular-nums">
-                        {formatCurrency(g.subtotal)}
-                      </span>
+                      <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">{g.label}</span>
+                      <span className="text-sm font-bold text-white tabular-nums">{formatCurrency(g.subtotal)}</span>
                     </div>
                     <AccountRows rows={g.rows} />
                   </div>
                 ))}
             </div>
+          ) : (
+            <AccountRows rows={accountBalancesList.filter((a) => !scopeFilter || a.scope === scopeFilter)} />
           )}
         </Card>
       )}
@@ -588,6 +584,11 @@ export default function FinanceOverview({ householdId }: { householdId: string }
       {/* ── Charts Section ── */}
       <Card>
         <div className="flex flex-wrap items-center gap-3 p-4 border-b border-zinc-800">
+          <div className="flex bg-zinc-800 rounded-lg p-0.5">
+            {CASH_VIEWS.map((v) => (
+              <button key={v.value} onClick={() => setCashView(v.value)} className={cn('px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors', cashView === v.value ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white')}>{v.label}</button>
+            ))}
+          </div>
           <select
             value={timeRange}
             onChange={(e) => setTimeRange(e.target.value as TimeRange)}
@@ -639,7 +640,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
               <CashFlowChart data={cashFlowChartData} />
             )}
             {chartView === 'account_balances' && (
-              <AccountBalancesChart data={accountBalancesChartData} accounts={accounts} />
+              <AccountBalancesChart data={accountBalancesChartData} accounts={accounts.filter((a) => scopedAccountIds.has(a.id))} />
             )}
             {chartView === 'debt_paydown' && (
               <DebtPaydownChart data={debtPaydownData} items={nwItems.filter((i) => i.type === 'liability')} />
@@ -755,7 +756,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
   );
 }
 
-// ─── Account Rows ───────────────────────────────────────────────────────────
+// ─── Account Rows ──────────────────────────────────────────────────────────────────
 
 function AccountRows({
   rows,
@@ -799,7 +800,7 @@ function AccountRows({
   );
 }
 
-// ─── Summary Card ───────────────────────────────────────────────────────────
+// ─── Summary Card ──────────────────────────────────────────────────────────────────
 
 function SummaryCard({
   icon,
@@ -830,7 +831,7 @@ function SummaryCard({
   );
 }
 
-// ─── Chart Components ───────────────────────────────────────────────────────
+// ─── Chart Components ────────────────────────────────────────────────────────────────
 
 const TOOLTIP_STYLE = {
   backgroundColor: '#18181b',
