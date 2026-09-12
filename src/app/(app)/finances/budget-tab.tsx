@@ -25,24 +25,24 @@ export function BudgetTab({
   const today = getToday();
   const currentMonth = today.slice(0, 7);
 
-  // ── View state ──────────────────────────────────────────────────────────────────
+  // ── View state ────────────────────────────────────────────────────────────────────
   const [viewMode, setViewMode] = useState<'view' | 'edit'>('view');
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [selectedWeek, setSelectedWeek] = useState(() => getMondayOfWeek(today));
 
-  // ── Data ───────────────────────────────────────────────────────────────────────
+  // ── Data ──────────────────────────────────────────────────────────────────────────
   const [categories, setCategories] = useState<BudgetCategory[]>([]);
   const [monthEntries, setMonthEntries] = useState<BudgetDailyEntry[]>([]);
   const [chartBudgetEntries, setChartBudgetEntries] = useState<BudgetDailyEntry[]>([]);
   const [chartIncomeEntries, setChartIncomeEntries] = useState<IncomeDailyEntry[]>([]);
 
-  // ── Add entry state ─────────────────────────────────────────────────────────────
+  // ── Add entry state ─────────────────────────────────────────────────────────────────
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null);
   const [addAmounts, setAddAmounts] = useState<Record<string, string>>({});
   const [addNotes, setAddNotes] = useState<Record<string, string>>({});
   const [addSaving, setAddSaving] = useState(false);
 
-  // ── Edit state ──────────────────────────────────────────────────────────────────
+  // ── Edit state ──────────────────────────────────────────────────────────────────────
   const [editDraft, setEditDraft] = useState<BudgetCategory[]>([]);
   const [editSaving, setEditSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export function BudgetTab({
   const [newCatAmount, setNewCatAmount] = useState('');
   const [newCatFreq, setNewCatFreq] = useState<BudgetFrequency>('monthly');
 
-  // ── Derived ────────────────────────────────────────────────────────────────────
+  // ── Derived ────────────────────────────────────────────────────────────────────────
   const monthStart = selectedMonth + '-01';
   const monthEnd = getMonthEnd(monthStart);
   const weeksInMonth = getWeeksInMonth(selectedMonth);
@@ -66,7 +66,7 @@ export function BudgetTab({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth]);
 
-  // ── Load data ─────────────────────────────────────────────────────────────────
+  // ── Load data ─────────────────────────────────────────────────────────────────────
   const loadCategories = useCallback(async () => {
     const { data } = await supabase
       .from('budget_categories')
@@ -103,7 +103,7 @@ export function BudgetTab({
   useEffect(() => { loadCategories(); loadChartEntries(); }, [loadCategories, loadChartEntries]);
   useEffect(() => { loadMonthEntries(selectedMonth); }, [selectedMonth, loadMonthEntries]);
 
-  // ── Computed spend ──────────────────────────────────────────────────────────────
+  // ── Computed spend ──────────────────────────────────────────────────────────────────
   const weekEnd = getWeekEnd(selectedWeek);
   const cumulativeEnd = minDate(weekEnd, monthEnd);
 
@@ -131,7 +131,7 @@ export function BudgetTab({
   const dailyAvg = dayOfMonth > 0 ? totalMonthSpend / dayOfMonth : 0;
   const projectedTotal = isCurrentMonth ? dailyAvg * daysInMonth : totalMonthSpend;
 
-  // ── Bar helpers ────────────────────────────────────────────────────────────────
+  // ── Bar helpers ────────────────────────────────────────────────────────────────────
   const barColor = (spent: number, budget: number) => {
     if (budget <= 0) return 'bg-blue-500';
     const pct = spent / budget;
@@ -148,7 +148,7 @@ export function BudgetTab({
     return 'text-emerald-400';
   };
 
-  // ── Add entry ─────────────────────────────────────────────────────────────────
+  // ── Add entry ──────────────────────────────────────────────────────────────────────
   const handleAddEntry = async (catId: string) => {
     const amount = parseFloat(addAmounts[catId] || '');
     if (isNaN(amount) || amount <= 0) return;
@@ -174,14 +174,14 @@ export function BudgetTab({
     await loadMonthEntries(selectedMonth);
   };
 
-  // ── Edit mode ─────────────────────────────────────────────────────────────────
+  // ── Edit mode ──────────────────────────────────────────────────────────────────────
   const openEdit = () => { setEditDraft(categories.map((c) => ({ ...c }))); setViewMode('edit'); };
 
   const saveEdit = async () => {
     setEditSaving(true);
     for (let i = 0; i < editDraft.length; i++) {
       const c = editDraft[i];
-      await supabase.from('budget_categories').update({ name: c.name, monthly_amount: c.monthly_amount, frequency: c.frequency ?? 'monthly', sort_order: i }).eq('id', c.id);
+      await supabase.from('budget_categories').update({ name: c.name, monthly_amount: c.monthly_amount, frequency: c.frequency ?? 'monthly', scope: c.scope ?? 'personal', sort_order: i }).eq('id', c.id);
     }
     setEditSaving(false);
     await loadCategories();
@@ -231,7 +231,7 @@ export function BudgetTab({
 
   const tooltipStyle = { contentStyle: { backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '8px', color: '#fff' } };
 
-  // ── EDIT SCREEN ─────────────────────────────────────────────────────────────────
+  // ── EDIT SCREEN ─────────────────────────────────────────────────────────────────────
   if (viewMode === 'edit') {
     return (
       <div className="space-y-4">
@@ -294,6 +294,15 @@ export function BudgetTab({
                       <option value="biweekly">Bi-weekly</option>
                       <option value="annual">Annual</option>
                     </select>
+                    {/* Personal / Business */}
+                    <select
+                      value={cat.scope ?? 'personal'}
+                      onChange={(e) => setEditDraft((d) => d.map((c, i) => i === idx ? { ...c, scope: e.target.value as 'personal' | 'business' } : c))}
+                      className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500 min-h-[40px]"
+                    >
+                      <option value="personal">Personal</option>
+                      <option value="business">Business</option>
+                    </select>
                     {/* Monthly equiv hint */}
                     {freq !== 'monthly' && (
                       <span className="text-xs text-zinc-500 whitespace-nowrap">= {formatCurrency(Math.round(moEquiv))}/mo</span>
@@ -347,7 +356,7 @@ export function BudgetTab({
     );
   }
 
-  // ── VIEW SCREEN ─────────────────────────────────────────────────────────────────
+  // ── VIEW SCREEN ─────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       {/* Month selector + Edit button */}
