@@ -7,6 +7,7 @@ import {
   type NutritionMacroKey,
   isMacroKey,
   normalizeItem,
+  syncFitnessNutritionFromFood,
 } from './nutrition';
 
 /** Cheap, fast model from the live AI Gateway catalog. Override with AI_GATEWAY_MODEL. */
@@ -87,6 +88,7 @@ quantity is a short portion phrase such as "2 large eggs". name is the food, not
   const output = parsed.output;
   if (!output) throw new Error('The food parser returned nothing.');
   await applyOperations(supabase, userId, date, items, output.operations);
+  await syncFitnessNutritionFromFood(supabase, userId, date);
   const reply = output.reply.trim().slice(0, 600) || 'Updated the food log. These numbers are estimates.';
   const { error: saveError } = await supabase.from('nutrition_messages').insert([
     { user_id: userId, date, role: 'user', content: message },

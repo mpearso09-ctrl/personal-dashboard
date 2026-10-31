@@ -4,11 +4,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { MilestonesTab } from './milestones-tab';
 import { TrendsTab } from './trends-tab';
 import {
-  BODY_FIELDS, NUTRITION_FIELDS, ACTIVITY_FIELDS, HABIT_FIELDS, DRINK_FIELDS, EMPTY_DAY, SCORE_METRICS,
+  BODY_FIELDS, ACTIVITY_FIELDS, HABIT_FIELDS, DRINK_FIELDS, EMPTY_DAY, SCORE_METRICS,
   shiftDate, fmtNum, avg, totalDrinks, shortDay, streak, type NumField, type BoolField, type DrinkField, type Hit, type MetricDef,
 } from './fitness-lib';
 import { FitnessSnapshot } from '@/components/fitness-snapshot';
-import { NutritionSummary } from '@/components/nutrition-summary';
 import { createClient } from '@/lib/supabase-browser';
 import { coerceFitnessDaily, coerceSession, metricsOf, workoutSummary } from '@/lib/fitness-metrics';
 import type { FitnessDaily, FitnessGoals, TrainingSession } from '@/lib/types';
@@ -162,7 +161,7 @@ export default function FitnessPage() {
     if (!user || readOnly) return;
     setSaveState('saving');
     const payload: Record<string, unknown> = { user_id: user.id, date: selectedDate };
-    ([...BODY_FIELDS, ...NUTRITION_FIELDS, ...ACTIVITY_FIELDS] as { name: NumField }[]).forEach((f) => {
+    ([...BODY_FIELDS, ...ACTIVITY_FIELDS] as { name: NumField }[]).forEach((f) => {
       const v = next[f.name];
       payload[f.name] = v === null || v === undefined || (v as unknown) === '' ? null : Number(v);
     });
@@ -365,43 +364,44 @@ export default function FitnessPage() {
         </div>
       </Card>
 
-      {/* NUTRITION */}
+      {/* NUTRITION — food log is the source of truth once a day has items */}
       <Card>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Nutrition</h3>
-        <div className="space-y-2">
-          {NUTRITION_FIELDS.map((f) => {
-            const Icon = f.icon; const v = day[f.name] as number | null;
-            const min = f.goalMin ? g(f.goalMin) : undefined; const max = f.goalMax ? g(f.goalMax) : undefined;
-            const color = getStatusColor(v, min, max);
-            const target = max ?? min; const pct = target && v ? Math.min(100, (v / target) * 100) : 0;
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Nutrition</h3>
+          {!readOnly && (
+            <Link href={`/nutrition?date=${selectedDate}`} className="text-sm text-blue-400 hover:text-blue-300">Log food</Link>
+          )}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {([
+            { label: 'Calories', unit: '', value: day.calories_consumed, min: undefined as number | undefined, max: g('calories_max') },
+            { label: 'Protein', unit: 'g', value: day.protein_g, min: g('protein_min'), max: undefined as number | undefined },
+            { label: 'Carbs', unit: 'g', value: day.carbs_g, min: g('carbs_min'), max: g('carbs_max') },
+            { label: 'Fat', unit: 'g', value: day.fat_g, min: g('fat_min'), max: g('fat_max') },
+            { label: 'Fiber', unit: 'g', value: day.fiber_g, min: g('fiber_min'), max: g('fiber_max') },
+          ]).map((field) => {
+            const color = getStatusColor(field.value ?? null, field.min, field.max);
+            const goal = field.min != null && field.max != null
+              ? `${field.min}–${field.max}${field.unit}`
+              : field.max != null
+                ? `${field.max}${field.unit} max`
+                : field.min != null
+                  ? `${field.min}${field.unit} min`
+                  : null;
             return (
-              <div key={f.name} className="bg-zinc-800/60 rounded-xl px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Icon className="h-4 w-4 text-zinc-400 shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline gap-2">
-                      <span className={cn('text-xl font-semibold tabular-nums', v == null ? 'text-zinc-500' : color)}>{fmtNum(v, f.unit)}</span>
-                      {target !== undefined && <span className="text-xs text-zinc-500">/ {target}{f.unit} {max ? 'max' : 'min'}</span>}
-                    </div>
-                    <div className="h-1 bg-zinc-700/60 rounded-full mt-1.5 overflow-hidden">
-                      <div className={cn('h-full rounded-full transition-all', color.replace('text-', 'bg-'))} style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                  {!readOnly && (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <input type="number" inputMode="decimal" value={addAmounts[f.name] ?? ''} placeholder="+"
-                        onChange={(e) => setAddAmounts((p) => ({ ...p, [f.name]: e.target.value }))}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTo(f.name); } }}
-                        className="w-16 h-11 bg-zinc-900 border border-zinc-700 rounded-lg px-2 text-sm text-white text-right focus:border-blue-500 outline-none" />
-                      <button onClick={() => addTo(f.name)} disabled={!addAmounts[f.name]} className="h-11 w-11 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-30 text-white flex items-center justify-center active:scale-95 transition"><Plus className="h-5 w-5" /></button>
-                    </div>
-                  )}
+              <div key={field.label} className="bg-zinc-800/60 rounded-xl px-3 py-2.5">
+                <div className="text-[11px] text-zinc-500">{field.label}</div>
+                <div className={cn('text-xl font-semibold tabular-nums', field.value == null ? 'text-zinc-500' : color)}>
+                  {fmtNum(field.value, field.unit)}
                 </div>
-                <div className="text-[11px] text-zinc-500 mt-1 pl-7">{f.label}</div>
+                {goal && <div className="text-[11px] text-zinc-500 mt-0.5">{goal}</div>}
               </div>
             );
           })}
         </div>
+        <p className="text-[11px] text-zinc-500 mt-3">
+          {readOnly ? 'From the food log when this day has meals. Older hand-entered days stay as they were.' : 'Logged on the Food page. A day with no meals keeps the numbers you entered by hand.'}
+        </p>
       </Card>
 
       {/* ACTIVITY */}
@@ -754,7 +754,6 @@ export default function FitnessPage() {
         onSelectDate={(date) => { setSelectedDate(date); setActiveTab('today'); }}
       />
 
-      {effectiveUserId && <NutritionSummary userId={effectiveUserId} date={todayKey} />}
 
       <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
         {tabs.map((t) => { const Icon = t.icon; return (

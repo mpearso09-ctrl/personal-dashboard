@@ -12,6 +12,7 @@ import {
   macroStatus,
   normalizeItem,
   normalizeSettings,
+  syncFitnessNutritionFromFood,
   type NutritionItem,
   type NutritionMacroKey,
   type NutritionSettings,
@@ -51,6 +52,10 @@ export default function NutritionPage() {
   const { user, loading } = useAuth();
   const supabase = createClient();
   const [date, setDate] = useState(getToday);
+  useEffect(() => {
+    const param = new URLSearchParams(window.location.search).get('date');
+    if (param && /^\d{4}-\d{2}-\d{2}$/.test(param) && param <= getToday()) setDate(param);
+  }, []);
   const [items, setItems] = useState<NutritionItem[]>([]);
   const [settings, setSettings] = useState<NutritionSettings>(normalizeSettings(null));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -162,6 +167,11 @@ export default function NutritionPage() {
       setError(deleteError.message);
       return;
     }
+    try {
+      await syncFitnessNutritionFromFood(supabase, user.id, date);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update the fitness totals.');
+    }
     setItems((current) => current.filter((item) => item.id !== id));
   }
 
@@ -182,6 +192,11 @@ export default function NutritionPage() {
     if (updateError) {
       setError(updateError.message);
       return;
+    }
+    try {
+      await syncFitnessNutritionFromFood(supabase, user.id, date);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update the fitness totals.');
     }
     setEditing(null);
     await load();
