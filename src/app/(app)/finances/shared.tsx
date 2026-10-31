@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { cn, getToday } from '@/lib/utils';
+import { cn, getToday, shiftDate } from '@/lib/utils';
 import type {
   BudgetCategory,
   AccountCurrency,
@@ -244,9 +244,7 @@ export function getWeekEnd(weekStart: string): string {
 }
 
 export function getDaysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().split('T')[0];
+  return shiftDate(getToday(), -n);
 }
 
 export function getYesterday(): string {

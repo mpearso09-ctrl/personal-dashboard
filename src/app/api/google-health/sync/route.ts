@@ -11,7 +11,7 @@ export async function POST() {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const result = await syncGoogleHealthUser(user.id);
+    const result = await syncGoogleHealthUser(user.id, { email: false });
     return NextResponse.json(result, { status: result.ok ? 200 : 502 });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Sync failed';

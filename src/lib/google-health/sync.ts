@@ -77,7 +77,13 @@ export type SyncResult = {
   email?: { sent: boolean; reason?: string };
 };
 
-export async function syncGoogleHealthUser(userId: string): Promise<SyncResult> {
+export type SyncOptions = {
+  /** Send the daily report, and a failure note if the sync cannot finish. Defaults to true. */
+  email?: boolean;
+};
+
+export async function syncGoogleHealthUser(userId: string, options: SyncOptions = {}): Promise<SyncResult> {
+  const emailEnabled = options.email !== false;
   const admin = createServiceClient();
   const { data: token, error } = await admin
     .from('google_health_tokens')
@@ -104,7 +110,9 @@ export async function syncGoogleHealthUser(userId: string): Promise<SyncResult> 
       connected: !invalid,
       last_sync_error: message,
     });
-    const email = await sendEmail(admin, userId, message, null);
+    const email = emailEnabled
+      ? await sendEmail(admin, userId, message, null)
+      : { sent: false, reason: 'skipped' };
     return { ok: false, userId, error: message, email };
   }
 
@@ -223,22 +231,26 @@ export async function syncGoogleHealthUser(userId: string): Promise<SyncResult> 
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Could not save Fitbit data';
     await writeState(admin, userId, { connected: true, last_sync_error: message });
-    const email = await sendEmail(admin, userId, message, null);
+    const email = emailEnabled
+      ? await sendEmail(admin, userId, message, null)
+      : { sent: false, reason: 'skipped' };
     return { ok: false, userId, error: message, timezone: timeZone, yesterday, today, skipped, email };
   }
 
   const note = [warning, skipped.length ? skipped.join('; ') : null].filter(Boolean).join(' ');
-  const email = await sendReport(admin, userId, {
-    yesterday,
-    today,
-    skipped,
-    warning,
-  });
+  const email = emailEnabled
+    ? await sendReport(admin, userId, {
+      yesterday,
+      today,
+      skipped,
+      warning,
+    })
+    : null;
   await writeState(admin, userId, {
     connected: true,
     last_synced_at: new Date().toISOString(),
     last_sync_error: note || null,
-    last_email_error: email.sent ? null : email.reason ?? 'Email was not sent',
+    ...(email ? { last_email_error: email.sent ? null : email.reason ?? 'Email was not sent' } : {}),
   });
 
   return {
@@ -250,17 +262,17 @@ export async function syncGoogleHealthUser(userId: string): Promise<SyncResult> 
     sessionsImported,
     skipped,
     warning,
-    email,
+    email: email ?? { sent: false, reason: 'skipped' },
   };
 }
 
-export async function syncAllConnected(): Promise<SyncResult[]> {
+export async function syncAllConnected(options: SyncOptions = {}): Promise<SyncResult[]> {
   const admin = createServiceClient();
   const { data, error } = await admin.from('google_health_tokens').select('user_id');
   if (error) throw new Error(error.message);
   const results: SyncResult[] = [];
   for (const row of data ?? []) {
-    results.push(await syncGoogleHealthUser(row.user_id as string));
+    results.push(await syncGoogleHealthUser(row.user_id as string, options));
   }
   return results;
 }
