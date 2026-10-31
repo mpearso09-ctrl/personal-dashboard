@@ -39,6 +39,7 @@ import {
   ymdFromGoogleDate,
 } from './parse';
 import { buildFitbitReportHtml, type ReportMetrics } from './report';
+import { nutritionEmailHtml, normalizeItem, normalizeSettings } from '@/lib/nutrition';
 
 type TokenRow = {
   user_id: string;
@@ -520,12 +521,14 @@ async function sendReport(
     notes: (session.notes as string | null) ?? null,
     source: (session.source as string | null) ?? null,
   }));
+  const nutritionHtml = await yesterdayNutritionHtml(admin, userId, input.yesterday);
   const html = buildFitbitReportHtml({
     yesterday: input.yesterday,
     today: input.today,
     yesterdayMetrics: metrics(input.yesterday),
     todayMetrics: metrics(input.today),
     prior: priorDates.map(metrics),
+    nutritionHtml,
     workouts: workouts.filter((session) => session.date === input.yesterday),
     todayWorkouts: workouts.filter((session) => session.date === input.today),
     skipped: input.skipped,
@@ -538,6 +541,18 @@ async function sendReport(
     timeZone: 'UTC',
   });
   return deliver(html, `Fitbit daily — ${label}`);
+}
+
+async function yesterdayNutritionHtml(admin: SupabaseClient, userId: string, date: string): Promise<string> {
+  const [{ data: items, error: itemError }, { data: settings, error: settingError }] = await Promise.all([
+    admin.from('nutrition_items').select('*').eq('user_id', userId).eq('date', date).order('created_at'),
+    admin.from('nutrition_settings').select('tracked, targets').eq('user_id', userId).maybeSingle(),
+  ]);
+  if (itemError || settingError) return '';
+  return nutritionEmailHtml(
+    ((items ?? []) as Record<string, unknown>[]).map(normalizeItem),
+    normalizeSettings(settings),
+  );
 }
 
 async function sendEmail(

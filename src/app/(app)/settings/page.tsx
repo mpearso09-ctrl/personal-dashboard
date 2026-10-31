@@ -7,6 +7,7 @@ import { useHousehold } from '@/components/household-provider';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import type { FitnessGoals, HouseholdMember } from '@/lib/types';
 import { Settings, Save, Check, Users, Shield, ShieldCheck } from 'lucide-react';
+import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
 const defaultGoals: Omit<FitnessGoals, 'id' | 'user_id' | 'updated_at'> = {
@@ -125,6 +126,10 @@ export default function SettingsPage() {
         <Settings size={24} />
         Settings
       </h1>
+      <p className="text-sm text-zinc-400">
+        Food macros and daily targets are separate for each login.{' '}
+        <Link href="/nutrition/settings" className="text-blue-400 hover:text-blue-300">Nutrition settings</Link>
+      </p>
 
       {/* Household & Finance Permissions */}
       <Card>

@@ -94,6 +94,7 @@ export function buildFitbitReportHtml(input: {
   todayMetrics: ReportMetrics;
   skipped: string[];
   warning?: string | null;
+  nutritionHtml?: string;
 }): string {
   const rows = METRICS.map((metric) => {
     const value = input.yesterdayMetrics[metric.key];
@@ -164,6 +165,8 @@ export function buildFitbitReportHtml(input: {
     <div style="color:#e4e4e7;margin-bottom:8px;">${todayBits.length ? esc(todayBits.join(' · ')) : 'Nothing recorded yet today.'}</div>
     ${input.todayWorkouts.length ? workoutBlock(input.todayWorkouts, '') : ''}
   </div>
+
+  ${input.nutritionHtml ?? ''}
 
   ${notes.length ? `<div style="margin-top:16px;font-size:13px;color:#fbbf24;">${notes.map((note) => esc(note!)).join('<br>')}</div>` : ''}
 

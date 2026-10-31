@@ -8,6 +8,7 @@ import {
   shiftDate, fmtNum, avg, totalDrinks, shortDay, streak, type NumField, type BoolField, type DrinkField, type Hit, type MetricDef,
 } from './fitness-lib';
 import { FitnessSnapshot } from '@/components/fitness-snapshot';
+import { NutritionSummary } from '@/components/nutrition-summary';
 import { createClient } from '@/lib/supabase-browser';
 import { coerceFitnessDaily, coerceSession, metricsOf, workoutSummary } from '@/lib/fitness-metrics';
 import type { FitnessDaily, FitnessGoals, TrainingSession } from '@/lib/types';
@@ -752,6 +753,8 @@ export default function FitnessPage() {
         workouts={sessions.filter((session) => session.date === yesterdayKey || session.date === todayKey)}
         onSelectDate={(date) => { setSelectedDate(date); setActiveTab('today'); }}
       />
+
+      {effectiveUserId && <NutritionSummary userId={effectiveUserId} date={todayKey} />}
 
       <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
         {tabs.map((t) => { const Icon = t.icon; return (
