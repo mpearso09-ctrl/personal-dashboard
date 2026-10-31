@@ -1,4 +1,4 @@
-import { generateText, NoObjectGeneratedError, Output } from 'ai';
+import { generateText, NoObjectGeneratedError, NoTranscriptGeneratedError, Output, transcribe } from 'ai';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import {
@@ -44,6 +44,15 @@ const LIMITS: Record<NutritionMacroKey, { max: number; digits: number }> = {
   sodium_mg: { max: 20000, digits: 0 },
 };
 
+/** Cheap Gateway transcription model. Override with AI_GATEWAY_TRANSCRIBE_MODEL. */
+export const DEFAULT_TRANSCRIBE_MODEL = 'openai/gpt-4o-mini-transcribe';
+
+export function transcribeModel(): string {
+  const configured = process.env.AI_GATEWAY_TRANSCRIBE_MODEL?.trim();
+  if (configured && configured.includes('/')) return configured;
+  return DEFAULT_TRANSCRIBE_MODEL;
+}
+
 export function nutritionModel(): string {
   const configured = process.env.AI_GATEWAY_MODEL?.trim();
   if (configured && configured.includes('/')) return configured;
@@ -58,7 +67,26 @@ export function nutritionAiError(err: unknown): string {
   if (NoObjectGeneratedError.isInstance(err)) {
     return 'I could not turn that into food items. Try naming the foods and portions again.';
   }
+  if (NoTranscriptGeneratedError.isInstance(err)) {
+    return 'No words were heard in that recording. Tap the mic and try again.';
+  }
   return 'The food parser did not respond. Try again in a moment.';
+}
+
+export async function transcribeAndLogFood(
+  supabase: SupabaseClient,
+  userId: string,
+  date: string,
+  audio: Uint8Array,
+): Promise<{ transcript: string; reply: string }> {
+  const result = await transcribe({
+    model: transcribeModel(),
+    audio,
+  });
+  const transcript = result.text?.trim() ?? '';
+  if (!transcript) throw new Error('No words were heard in that recording. Tap the mic and try again.');
+  const logged = await logFoodTurn(supabase, userId, date, transcript);
+  return { transcript, reply: logged.reply };
 }
 
 export async function logFoodTurn(
