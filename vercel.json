@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/fitbit-sync",
-      "schedule": "0 11 * * *"
+      "schedule": "30 8 * * *"
     }
   ]
 }

@@ -11,7 +11,7 @@ The live site is `https://personal-dashboard-brown.vercel.app`.
 - A **Connect Fitbit** button on the Fitness page.
 - Steps, sleep, calories burned, weight, body fat, and resting heart rate filled in for yesterday and today.
 - Workouts copied into Training, without creating a second copy if the sync runs again.
-- A daily email. The automatic run is **11:00 UTC** every day (7:00 AM Atlantic daylight time, 8:00 AM Atlantic standard time).
+- A daily email. The automatic run is **08:30 UTC** every day (4:30 AM Atlantic standard time, 5:30 AM Atlantic daylight time).
 
 Food, drinks, notes, stretching, and the evening-walk tick are left alone.
 
@@ -145,7 +145,7 @@ Do **not** put the service role key or the Google secret in any variable whose n
 
 Yesterday and today should fill in. Training should show any workouts from those two days, marked Fitbit. The line under the title should say **Last synced from Fitbit** with a time. The daily email goes to `FITBIT_REPORT_EMAIL`.
 
-The automatic job is already in `vercel.json`. On the Hobby plan it runs once a day, at 11:00 UTC, and only on the production deployment. **Sync now** is there so you do not have to wait for the morning.
+The automatic job is already in `vercel.json`. On the Hobby plan it runs once a day, at 08:30 UTC (4:30 AM Halifax, Atlantic standard time), and only on the production deployment. **Sync now** is there so you do not have to wait for the morning.
 
 ## If something fails
 
