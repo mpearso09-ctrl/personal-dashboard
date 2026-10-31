@@ -24,6 +24,8 @@ export function TrendsTab({ rangeData, goals, streaks, range, setRange }: {
     const nutrition = rangeData.map((d) => ({ date: d.date, protein: d.protein_g, fiber: d.fiber_g }));
     const steps = rangeData.filter((d) => d.steps != null).map((d) => ({ date: d.date, v: d.steps as number }));
     const sleep = rangeData.filter((d) => d.sleep_hours != null).map((d) => ({ date: d.date, v: d.sleep_hours as number }));
+    const burned = rangeData.filter((d) => d.calories_burned != null).map((d) => ({ date: d.date, v: d.calories_burned as number }));
+    const heart = rangeData.filter((d) => d.resting_heart_rate != null).map((d) => ({ date: d.date, v: d.resting_heart_rate as number }));
     // alcohol by ISO week
     const weeks = new Map<string, { wine: number; beer: number; spirits: number; dry: number; logged: number }>();
     rangeData.forEach((d) => {
@@ -130,6 +132,31 @@ export function TrendsTab({ rangeData, goals, streaks, range, setRange }: {
                 {goals && <ReferenceLine y={goals.sleep_min} stroke="#10b981" strokeDasharray="4 4" />}
                 <Bar dataKey="v" name="Hours" radius={[3, 3, 0, 0]}>{sleep.map((s) => <Cell key={s.date} fill={goals && s.v >= goals.sleep_min ? '#10b981' : '#6366f1'} />)}</Bar>
               </BarChart>
+            </ResponsiveContainer>
+          </Chart>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Chart title="Calories burned" empty={!burned.length}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={burned} margin={{ top: 5, right: 5, left: -15, bottom: 0 }}>
+                <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
+                <XAxis dataKey="date" tickFormatter={shortDate} {...axis} minTickGap={30} /><YAxis {...axis} />
+                <Tooltip contentStyle={tooltipStyle} labelFormatter={(v) => formatDate(String(v))} />
+                {goals && <ReferenceLine y={goals.calories_burned_min} stroke="#10b981" strokeDasharray="4 4" />}
+                <Bar dataKey="v" name="Calories" fill="#f97316" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </Chart>
+          <Chart title="Resting heart rate" empty={!heart.length}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={heart} margin={{ top: 5, right: 5, left: -15, bottom: 0 }}>
+                <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
+                <XAxis dataKey="date" tickFormatter={shortDate} {...axis} minTickGap={30} />
+                <YAxis domain={['auto', 'auto']} {...axis} />
+                <Tooltip contentStyle={tooltipStyle} labelFormatter={(v) => formatDate(String(v))} />
+                <Line type="monotone" dataKey="v" stroke="#fb7185" strokeWidth={2.5} dot={{ r: 2 }} name="bpm" />
+              </LineChart>
             </ResponsiveContainer>
           </Chart>
         </div>

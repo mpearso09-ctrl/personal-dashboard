@@ -1,6 +1,8 @@
 import type { FitnessDaily, FitnessGoals } from '@/lib/types';
-import { getToday } from '@/lib/utils';
+import { getToday, shiftDate, toNumber } from '@/lib/utils';
 import { Dumbbell, Footprints, Moon, Flame, Beef, Salad, Weight, Percent, Activity, Wine, Beer, Martini, StretchHorizontal, Sunset } from 'lucide-react';
+
+export { shiftDate };
 
 // ---------------------------------------------------------------------------
 // Field definitions
@@ -56,20 +58,15 @@ export const EMPTY_DAY: Partial<FitnessDaily> = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-export function shiftDate(date: string, days: number): string {
-  const d = new Date(date + 'T00:00:00');
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
-
 export function fmtNum(v: number | null | undefined, unit = '', digits = 0): string {
-  if (v === null || v === undefined) return '—';
-  const n = digits ? v.toFixed(digits) : Math.round(v).toLocaleString();
-  return `${n}${unit}`;
+  const n = toNumber(v);
+  if (n === null) return '—';
+  const text = digits ? n.toFixed(digits) : Math.round(n).toLocaleString();
+  return `${text}${unit}`;
 }
 
 export function avg(vals: (number | null | undefined)[]): number | null {
-  const xs = vals.filter((v): v is number => v !== null && v !== undefined);
+  const xs = vals.map((v) => toNumber(v)).filter((v): v is number => v !== null);
   if (!xs.length) return null;
   return xs.reduce((a, b) => a + b, 0) / xs.length;
 }

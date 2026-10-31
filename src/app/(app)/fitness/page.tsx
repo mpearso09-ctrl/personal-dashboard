@@ -7,8 +7,10 @@ import {
   BODY_FIELDS, NUTRITION_FIELDS, ACTIVITY_FIELDS, HABIT_FIELDS, DRINK_FIELDS, EMPTY_DAY, SCORE_METRICS,
   shiftDate, fmtNum, avg, totalDrinks, shortDay, streak, type NumField, type BoolField, type DrinkField, type Hit, type MetricDef,
 } from './fitness-lib';
+import { FitnessSnapshot } from '@/components/fitness-snapshot';
 import { createClient } from '@/lib/supabase-browser';
-import type { FitnessDaily, FitnessGoals } from '@/lib/types';
+import { coerceFitnessDaily, coerceSession, metricsOf, workoutSummary } from '@/lib/fitness-metrics';
+import type { FitnessDaily, FitnessGoals, TrainingSession } from '@/lib/types';
 import { getToday, getDayOfChallenge, getStatusColor, cn, formatDate } from '@/lib/utils';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/components/auth-provider';
@@ -55,6 +57,7 @@ export default function FitnessPage() {
 
   // history (last 120 days, shared by Week + Trends)
   const [history, setHistory] = useState<FitnessDaily[]>([]);
+  const [sessions, setSessions] = useState<TrainingSession[]>([]);
   const [range, setRange] = useState<30 | 60 | 90>(30);
   const [syncState, setSyncState] = useState<{ connected: boolean; last_synced_at: string | null; last_sync_error: string | null } | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -75,7 +78,7 @@ export default function FitnessPage() {
     if (!user) return;
     const { data } = await supabase.from('fitness_daily').select('*')
       .eq('user_id', effectiveUserId).eq('date', selectedDate).maybeSingle();
-    setDay(data ? (data as FitnessDaily) : { ...EMPTY_DAY });
+    setDay(data ? coerceFitnessDaily(data as FitnessDaily) : { ...EMPTY_DAY });
     setAddAmounts({});
   }, [user, effectiveUserId, selectedDate]);
 
@@ -83,7 +86,16 @@ export default function FitnessPage() {
     if (!user) return;
     const { data } = await supabase.from('fitness_daily').select('*')
       .eq('user_id', effectiveUserId).gte('date', shiftDate(getToday(), -120)).order('date');
-    setHistory((data as FitnessDaily[]) ?? []);
+    setHistory(((data as FitnessDaily[]) ?? []).map(coerceFitnessDaily));
+  }, [user, effectiveUserId]);
+
+  const fetchSessions = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase.from('training_sessions').select('*')
+      .eq('user_id', effectiveUserId)
+      .gte('date', shiftDate(getToday(), -14))
+      .order('date', { ascending: false });
+    setSessions(((data as TrainingSession[]) ?? []).map(coerceSession));
   }, [user, effectiveUserId]);
 
   const fetchSyncState = useCallback(async () => {
@@ -102,6 +114,7 @@ export default function FitnessPage() {
   useEffect(() => { fetchGoals(); }, [fetchGoals]);
   useEffect(() => { fetchDay(); }, [fetchDay]);
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
+  useEffect(() => { fetchSessions(); }, [fetchSessions]);
   useEffect(() => { fetchSyncState(); }, [fetchSyncState]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -122,10 +135,15 @@ export default function FitnessPage() {
         setSyncMsg(body.error || 'Sync failed');
       } else {
         const skipped = Array.isArray(body.skipped) && body.skipped.length ? ` Skipped: ${body.skipped.join('; ')}.` : '';
-        const email = body.email?.sent ? ' Email sent.' : body.email?.reason ? ` Email not sent (${body.email.reason}).` : '';
+        const email = body.email?.sent
+          ? ' Email sent.'
+          : body.email?.reason && body.email.reason !== 'skipped'
+            ? ` Email not sent (${body.email.reason}).`
+            : '';
         setSyncMsg(`Synced yesterday and today.${skipped}${email}`);
         await fetchDay();
         await fetchHistory();
+        await fetchSessions();
       }
       await fetchSyncState();
     } catch {
@@ -212,6 +230,14 @@ export default function FitnessPage() {
     ];
     return { done: checks.filter(Boolean).length, total: checks.length };
   }, [day]);
+
+  const todayKey = getToday();
+  const yesterdayKey = shiftDate(todayKey, -1);
+  const rowFor = (date: string): Partial<FitnessDaily> | null => {
+    const saved = history.find((entry) => entry.date === date) ?? null;
+    if (date === selectedDate && day.id) return day;
+    return saved;
+  };
 
   const last7 = useMemo(() => {
     const dates = Array.from({ length: 7 }, (_, i) => shiftDate(getToday(), -6 + i));
@@ -484,8 +510,8 @@ export default function FitnessPage() {
       const logged = res.filter((r) => r !== 'none').length;
       return logged ? Math.round((res.filter((r) => r === 'hit').length / logged) * 100) : null;
     };
-    const mAvg = (rows: FitnessDaily[], f: NumField) => avg(rows.map((r) => r[f] as number | null));
-    const cmp = (label: string, f: NumField, unit: string, digits: number, goodDown = false) => {
+    const mAvg = (rows: FitnessDaily[], f: NumField | 'resting_heart_rate') => avg(rows.map((r) => r[f] as number | null));
+    const cmp = (label: string, f: NumField | 'resting_heart_rate', unit: string, digits: number, goodDown = false) => {
       const a = mAvg(thisMonth, f), b = mAvg(lastMonth, f);
       const d = a != null && b != null ? a - b : null;
       const good = d == null ? null : goodDown ? d <= 0 : d >= 0;
@@ -495,7 +521,17 @@ export default function FitnessPage() {
       cmp('Weight', 'weight_lbs', ' lbs', 1, true), cmp('Body Fat', 'body_fat_pct', '%', 1, true), cmp('Visceral Fat', 'visceral_fat_pct', '%', 1, true),
       cmp('Calories', 'calories_consumed', '', 0, true), cmp('Protein', 'protein_g', 'g', 0), cmp('Fiber', 'fiber_g', 'g', 0),
       cmp('Steps', 'steps', '', 0), cmp('Sleep', 'sleep_hours', 'h', 1), cmp('Cals Burned', 'calories_burned', '', 0),
+      cmp('Resting HR', 'resting_heart_rate', ' bpm', 0, true),
     ];
+    const weekNumbers: { label: string; field: 'steps' | 'sleep_hours' | 'calories_burned' | 'resting_heart_rate' | 'weight_lbs' | 'body_fat_pct'; digits: number }[] = [
+      { label: 'Steps', field: 'steps', digits: 0 },
+      { label: 'Sleep', field: 'sleep_hours', digits: 1 },
+      { label: 'Burn', field: 'calories_burned', digits: 0 },
+      { label: 'RHR', field: 'resting_heart_rate', digits: 0 },
+      { label: 'Weight', field: 'weight_lbs', digits: 1 },
+      { label: 'Fat %', field: 'body_fat_pct', digits: 1 },
+    ];
+    const weekSessions = sessions.filter((session) => last7.some((d) => d.date === session.date));
     const count = (rows: FitnessDaily[], t: (d: FitnessDaily) => boolean) => rows.filter(t).length;
 
     return (
@@ -520,6 +556,50 @@ export default function FitnessPage() {
             );
           })}
         </div>
+
+        <Card>
+          <CardHeader className="mb-3"><CardTitle className="text-base">Daily numbers</CardTitle></CardHeader>
+          <div className="overflow-x-auto -mx-2 px-2">
+            <table className="w-full text-xs">
+              <thead>
+                <tr>
+                  <th className="text-left text-zinc-500 font-normal pb-2 w-16"></th>
+                  {last7.map((d) => <th key={d.date} className={cn('font-medium pb-2', d.date === todayKey ? 'text-blue-400' : 'text-zinc-400')}>{shortDay(d.date)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {weekNumbers.map((row) => (
+                  <tr key={row.label} className="border-t border-zinc-800/60">
+                    <td className="py-1.5 text-zinc-400">{row.label}</td>
+                    {last7.map((d) => {
+                      const value = d.entry ? (d.entry[row.field] as number | null) : null;
+                      const text = value == null ? '—' : row.digits ? value.toFixed(row.digits) : Math.round(value).toLocaleString('en-CA');
+                      return (
+                        <td key={d.date} className="py-1.5 text-center">
+                          <button type="button" onClick={() => { setSelectedDate(d.date); setActiveTab('today'); }} className="tabular-nums text-white hover:text-blue-300">{text}</button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader className="mb-3"><CardTitle className="text-base">Workouts</CardTitle></CardHeader>
+          {weekSessions.length === 0 ? <p className="text-zinc-500 text-sm">No workouts in the last 7 days.</p> : (
+            <div className="space-y-1">
+              {weekSessions.map((session) => (
+                <button key={session.id} type="button" onClick={() => { setSelectedDate(session.date); setActiveTab('today'); }} className="w-full flex items-center gap-2 text-sm bg-zinc-800/60 rounded-lg px-3 py-2 text-left">
+                  <span className="text-zinc-500 w-16 shrink-0">{shortDay(session.date)}</span>
+                  <span className="text-zinc-200">{workoutSummary(session)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Card>
 
         {/* Scorecard */}
         <Card>
@@ -663,6 +743,15 @@ export default function FitnessPage() {
           Read-only — viewing {householdUsers.find((u) => u.id === viewingUserId)?.displayName}&apos;s data
         </div>
       )}
+
+      <FitnessSnapshot
+        yesterday={yesterdayKey}
+        today={todayKey}
+        yesterdayMetrics={metricsOf(rowFor(yesterdayKey))}
+        todayMetrics={metricsOf(rowFor(todayKey))}
+        workouts={sessions.filter((session) => session.date === yesterdayKey || session.date === todayKey)}
+        onSelectDate={(date) => { setSelectedDate(date); setActiveTab('today'); }}
+      />
 
       <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
         {tabs.map((t) => { const Icon = t.icon; return (

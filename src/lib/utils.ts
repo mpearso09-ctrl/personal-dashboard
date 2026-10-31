@@ -38,16 +38,50 @@ export function formatDate(date: string): string {
   });
 }
 
+/** Calendar the Fitbit sync uses. UTC "today" is already tomorrow after 8pm in Halifax. */
+export const APP_TIME_ZONE = 'America/Halifax';
+
+export function formatYmd(date: Date, timeZone = APP_TIME_ZONE): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  if (!year || !month || !day) return date.toISOString().slice(0, 10);
+  return `${year}-${month}-${day}`;
+}
+
 export function getToday(): string {
-  return new Date().toISOString().split('T')[0];
+  return formatYmd(new Date());
+}
+
+/** Add calendar days to a YYYY-MM-DD string. Independent of the machine timezone. */
+export function shiftDate(date: string, days: number): string {
+  const [year, month, day] = date.split('-').map(Number);
+  const utc = new Date(Date.UTC(year, (month || 1) - 1, (day || 1) + days));
+  return utc.toISOString().slice(0, 10);
 }
 
 export function getWeekStart(date: string): string {
-  const d = new Date(date + 'T00:00:00');
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
-  const monday = new Date(d.setDate(diff));
-  return monday.toISOString().split('T')[0];
+  const [year, month, day] = date.split('-').map(Number);
+  const utc = new Date(Date.UTC(year, (month || 1) - 1, day || 1));
+  const dow = utc.getUTCDay();
+  const mondayOffset = dow === 0 ? -6 : 1 - dow;
+  utc.setUTCDate(utc.getUTCDate() + mondayOffset);
+  return utc.toISOString().slice(0, 10);
+}
+
+export function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 export function getDayOfChallenge(startDate: string | null): number | null {

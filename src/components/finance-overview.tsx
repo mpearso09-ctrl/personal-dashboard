@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
-import { formatCurrency, getToday, getWeekStart, cn, fetchAllRows } from '@/lib/utils';
+import { formatCurrency, getToday, getWeekStart, shiftDate, cn, fetchAllRows } from '@/lib/utils';
 import type {
   BudgetCategory,
   BudgetDailyEntry,
@@ -118,9 +118,7 @@ function getMonthStart(): string {
 }
 
 function getYesterday(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().split('T')[0];
+  return shiftDate(getToday(), -1);
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────────

@@ -9,19 +9,21 @@ import {
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
 import { useHousehold } from '@/components/household-provider';
-import { formatCurrency, getToday, getDayOfChallenge, cn } from '@/lib/utils';
+import { FitnessSnapshot } from '@/components/fitness-snapshot';
+import { formatCurrency, getToday, getDayOfChallenge, shiftDate, APP_TIME_ZONE, cn, toNumber } from '@/lib/utils';
 import { fetchUsdCadRate, toCad } from '@/lib/fx';
+import { coerceFitnessDaily, coerceSession, metricsOf } from '@/lib/fitness-metrics';
 import type {
   FitnessDaily, FitnessGoals, Account, AccountBalance,
-  NetWorthEntry, NetWorthItem, BudgetDailyEntry, IncomeDailyEntry,
+  NetWorthEntry, NetWorthItem, BudgetDailyEntry, IncomeDailyEntry, TrainingSession,
 } from '@/lib/types';
 
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
 
-function avg(arr: (number | null)[]): number | null {
-  const vals = arr.filter((v): v is number => v !== null);
+function avg(arr: unknown[]): number | null {
+  const vals = arr.map((value) => toNumber(value)).filter((value): value is number => value !== null);
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 }
 
@@ -38,7 +40,7 @@ function trend(data: number[], higherIsBetter: boolean): 'up' | 'down' | 'flat' 
 }
 
 function fmt(v: number | null, decimals = 0): string {
-  if (v === null) return '—';
+  if (v === null || !Number.isFinite(v)) return '—';
   return decimals > 0 ? v.toFixed(decimals) : Math.round(v).toLocaleString();
 }
 
@@ -65,6 +67,7 @@ interface FitnessData {
   entries: FitnessDaily[];
   prevEntries: FitnessDaily[];
   goals: FitnessGoals | null;
+  sessions: TrainingSession[];
 }
 
 interface FinanceData {
@@ -183,25 +186,21 @@ function FitnessSection({
       setLoading(true);
 
       const today = getToday();
-      const d30ago = new Date(today + 'T00:00:00');
-      d30ago.setDate(d30ago.getDate() - 29);
-      const start30 = d30ago.toISOString().split('T')[0];
+      const start30 = shiftDate(today, -29);
+      const start60 = shiftDate(today, -59);
 
-      const d60ago = new Date(today + 'T00:00:00');
-      d60ago.setDate(d60ago.getDate() - 59);
-      const start60 = d60ago.toISOString().split('T')[0];
-      const end60 = d30ago.toISOString().split('T')[0];
-
-      const [recentRes, prevRes, goalsRes] = await Promise.all([
+      const [recentRes, prevRes, goalsRes, sessionRes] = await Promise.all([
         supabase.from('fitness_daily').select('*').eq('user_id', viewUserId).gte('date', start30).lte('date', today).order('date'),
         supabase.from('fitness_daily').select('*').eq('user_id', viewUserId).gte('date', start60).lt('date', start30).order('date'),
         supabase.from('fitness_goals').select('*').eq('user_id', viewUserId).maybeSingle(),
+        supabase.from('training_sessions').select('*').eq('user_id', viewUserId).gte('date', shiftDate(today, -1)).lte('date', today).order('date', { ascending: false }),
       ]);
 
       setFitnessData({
-        entries: recentRes.data ?? [],
-        prevEntries: prevRes.data ?? [],
+        entries: ((recentRes.data ?? []) as FitnessDaily[]).map(coerceFitnessDaily),
+        prevEntries: ((prevRes.data ?? []) as FitnessDaily[]).map(coerceFitnessDaily),
         goals: goalsRes.data,
+        sessions: ((sessionRes.data ?? []) as TrainingSession[]).map(coerceSession),
       });
       setLoading(false);
     }
@@ -218,7 +217,9 @@ function FitnessSection({
 
   if (!fitnessData) return null;
 
-  const { entries, prevEntries, goals } = fitnessData;
+  const { entries, goals, sessions } = fitnessData;
+  const todayKey = getToday();
+  const yesterdayKey = shiftDate(todayKey, -1);
 
   // Challenge progress
   const challengeDay = goals?.challenge_start_date ? getDayOfChallenge(goals.challenge_start_date) : null;
@@ -266,6 +267,11 @@ function FitnessSection({
 
   const stepsChartData = entries.map((e) => ({ date: e.date, steps: e.steps }));
   const calsChartData = entries.map((e) => ({ date: e.date, calories: e.calories_consumed }));
+  const heartChartData = entries
+    .filter((e) => e.resting_heart_rate != null)
+    .map((e) => ({ date: e.date, heart: e.resting_heart_rate }));
+  const avgHeart = avg(entries.map((e) => e.resting_heart_rate));
+  const heartTrend = trend(entries.map((e) => e.resting_heart_rate).filter((v): v is number => v !== null), false);
 
   const myName = householdUsers.find((u) => u.id === userId)?.displayName ?? 'Me';
   const viewingOther = viewUserId !== userId;
@@ -298,6 +304,15 @@ function FitnessSection({
           )}
         </div>
       )}
+
+      <FitnessSnapshot
+        tone="inset"
+        yesterday={yesterdayKey}
+        today={todayKey}
+        yesterdayMetrics={metricsOf(entries.find((entry) => entry.date === yesterdayKey))}
+        todayMetrics={metricsOf(entries.find((entry) => entry.date === todayKey))}
+        workouts={sessions}
+      />
 
       {entries.length === 0 ? (
         <p className="text-zinc-500 text-sm">
@@ -377,6 +392,12 @@ function FitnessSection({
                 goodDir="up"
                 goalColor={avgBurned && goals ? (avgBurned >= goals.calories_burned_min ? 'text-emerald-400' : 'text-red-400') : undefined}
               />
+              <MetricLine
+                label="Resting HR"
+                value={avgHeart ? `${fmt(avgHeart)} bpm` : '—'}
+                trendDir={heartTrend}
+                goodDir="down"
+              />
             </div>
           </Card>
 
@@ -405,6 +426,11 @@ function FitnessSection({
             {stepsChartData.some((d) => d.steps !== null) && (
               <SparkCard label="Steps" goal={goals?.steps_min}>
                 <Sparkline data={stepsChartData} dataKey="steps" color="#34d399" goal={goals?.steps_min} />
+              </SparkCard>
+            )}
+            {heartChartData.length > 1 && (
+              <SparkCard label="Resting heart rate">
+                <Sparkline data={heartChartData} dataKey="heart" color="#fb7185" />
               </SparkCard>
             )}
             {calsChartData.some((d) => d.calories !== null) && (
@@ -741,17 +767,16 @@ export default function DashboardPage() {
     );
   }
 
-  const today = new Date().toLocaleDateString('en-CA', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-  });
-
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-          <p className="text-sm text-zinc-400 mt-0.5">{today}</p>
+          <p className="text-sm text-zinc-400 mt-0.5">{new Date().toLocaleDateString('en-CA', {
+            timeZone: APP_TIME_ZONE,
+            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+          })}</p>
         </div>
       </div>
 

@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
-import { cn, formatDate, getToday } from '@/lib/utils';
+import { coerceSession } from '@/lib/fitness-metrics';
+import { cn, formatDate, getToday, getWeekStart, shiftDate } from '@/lib/utils';
 import { DEFAULT_GYM_EXERCISES } from '@/lib/types';
 import type { TrainingSession, SessionType, RunSubtype, GymExercise, MilestoneType, MilestoneEntry } from '@/lib/types';
 import {
@@ -42,8 +43,7 @@ const LIFT_COLORS = ['#a78bfa', '#38bdf8', '#fb923c', '#facc15', '#34d399', '#f4
 
 const freshGym = (): GymExercise[] => DEFAULT_GYM_EXERCISES.map((e) => ({ name: e.name, target_sets: 4, target_reps: 12, weight: null, done: [false, false, false, false] }));
 
-function shiftDate(date: string, days: number) { const d = new Date(date + 'T00:00:00'); d.setDate(d.getDate() + days); return d.toISOString().split('T')[0]; }
-function mondayOf(date: string) { const d = new Date(date + 'T00:00:00'); const dow = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dow); return d.toISOString().split('T')[0]; }
+function mondayOf(date: string) { return getWeekStart(date); }
 function fmtTime(min: number | null) { if (min == null) return '—'; const s = Math.round(min * 60); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`; }
 function parseTime(v: string): number | null { if (!v.trim()) return null; const p = v.split(':').map(Number); if (p.some(isNaN)) return null; if (p.length === 1) return p[0]; if (p.length === 2) return p[0] + p[1] / 60; return p[0] * 60 + p[1] + p[2] / 60; }
 function pace(min: number | null, km: number | null) { if (!min || !km) return null; return min / km; }
@@ -121,7 +121,7 @@ export default function TrainingPage() {
     if (!user) return;
     const { data } = await supabase.from('training_sessions').select('*').eq('user_id', user.id)
       .gte('date', shiftDate(getToday(), -180)).order('date', { ascending: false }).order('created_at', { ascending: false });
-    setSessions((data as TrainingSession[]) ?? []);
+    setSessions(((data as TrainingSession[]) ?? []).map(coerceSession));
   }, [user]);
   useEffect(() => { load(); }, [load]);
 
@@ -184,7 +184,7 @@ export default function TrainingPage() {
   const monthKey = getToday().slice(0, 7);
   const thisMonth = useMemo(() => sessions.filter((s) => s.date.startsWith(monthKey)), [sessions, monthKey]);
   const countBy = (rows: TrainingSession[], t: SessionType) => rows.filter((s) => s.type === t).length;
-  const runKm = (rows: TrainingSession[]) => rows.filter((s) => s.type === 'run').reduce((a, s) => a + (s.distance_km ?? 0), 0);
+  const runKm = (rows: TrainingSession[]) => rows.filter((s) => s.type === 'run').reduce((a, s) => a + (Number(s.distance_km) || 0), 0);
 
   const paceTrend = useMemo(() => sessions.filter((s) => s.type === 'run' && s.subtype === 'distance' && s.duration_min && s.distance_km)
     .map((s) => ({ date: s.date, pace: +(pace(s.duration_min, s.distance_km)!).toFixed(2), km: s.distance_km })).reverse(), [sessions]);
