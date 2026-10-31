@@ -13,9 +13,10 @@ import { getToday, getDayOfChallenge, getStatusColor, cn, formatDate } from '@/l
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/components/auth-provider';
 import { useHousehold } from '@/components/household-provider';
+import Link from 'next/link';
 import {
   Dumbbell, Footprints, Flame, Beef, Target, ClipboardList, BarChart3, CalendarDays, Trophy, Plus, Minus, Check,
-  ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Wine, StretchHorizontal, Sunset,
+  ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Wine, StretchHorizontal, Sunset, HeartPulse,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,10 @@ export default function FitnessPage() {
   // history (last 120 days, shared by Week + Trends)
   const [history, setHistory] = useState<FitnessDaily[]>([]);
   const [range, setRange] = useState<30 | 60 | 90>(30);
+  const [syncState, setSyncState] = useState<{ connected: boolean; last_synced_at: string | null; last_sync_error: string | null } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
 
   // =========================================================================
   // Fetching
@@ -81,9 +86,54 @@ export default function FitnessPage() {
     setHistory((data as FitnessDaily[]) ?? []);
   }, [user, effectiveUserId]);
 
+  const fetchSyncState = useCallback(async () => {
+    if (!user || isViewingOther) return;
+    const { data } = await supabase.from('fitness_sync_state')
+      .select('connected, last_synced_at, last_sync_error')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    setSyncState(data ? {
+      connected: !!data.connected,
+      last_synced_at: data.last_synced_at,
+      last_sync_error: data.last_sync_error,
+    } : { connected: false, last_synced_at: null, last_sync_error: null });
+  }, [user, isViewingOther]);
+
   useEffect(() => { fetchGoals(); }, [fetchGoals]);
   useEffect(() => { fetchDay(); }, [fetchDay]);
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
+  useEffect(() => { fetchSyncState(); }, [fetchSyncState]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('fitbit') !== 'connected') return;
+    setBanner(params.get('partial') === '1'
+      ? 'Fitbit connected, but Google withheld some permissions. Sync will skip anything that was not allowed. Connect again to grant the rest.'
+      : 'Fitbit connected. Use Sync now to pull yesterday and today.');
+    window.history.replaceState({}, '', '/fitness');
+  }, []);
+
+  const syncNow = async () => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await fetch('/api/google-health/sync', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) {
+        setSyncMsg(body.error || 'Sync failed');
+      } else {
+        const skipped = Array.isArray(body.skipped) && body.skipped.length ? ` Skipped: ${body.skipped.join('; ')}.` : '';
+        const email = body.email?.sent ? ' Email sent.' : body.email?.reason ? ` Email not sent (${body.email.reason}).` : '';
+        setSyncMsg(`Synced yesterday and today.${skipped}${email}`);
+        await fetchDay();
+        await fetchHistory();
+      }
+      await fetchSyncState();
+    } catch {
+      setSyncMsg('Sync failed');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // =========================================================================
   // Saving — every change persists; direct-entry fields are debounced
@@ -357,6 +407,14 @@ export default function FitnessPage() {
             );
           })}
         </div>
+        <div className="mt-2 bg-zinc-800/60 rounded-xl p-3 flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-zinc-400 text-xs"><HeartPulse className="h-3.5 w-3.5" />Resting HR</div>
+          <div className="text-2xl font-semibold tabular-nums text-white">
+            {day.resting_heart_rate ?? '—'}
+            <span className="text-sm text-zinc-500 ml-1">bpm</span>
+          </div>
+        </div>
+        <div className="text-[11px] text-zinc-500 mt-1">From Fitbit when the watch has a resting heart rate for this day.</div>
       </Card>
 
       {/* HABITS */}
@@ -569,6 +627,36 @@ export default function FitnessPage() {
           </div>
         )}
       </div>
+
+      {!isViewingOther && syncState && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+          <HeartPulse className="h-3.5 w-3.5 text-rose-400" />
+          {syncState?.connected ? (
+            <span>
+              Last synced from Fitbit
+              {syncState.last_synced_at
+                ? ` · ${new Date(syncState.last_synced_at).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                : ' · not yet'}
+            </span>
+          ) : (
+            <Link href="/fitness/connect" className="text-blue-400 hover:text-blue-300">Connect Fitbit</Link>
+          )}
+          {syncState?.connected && (
+            <>
+              <button onClick={syncNow} disabled={syncing} className="h-7 px-2 rounded-lg bg-zinc-800 text-zinc-200 hover:bg-zinc-700 disabled:opacity-50">
+                {syncing ? 'Syncing…' : 'Sync now'}
+              </button>
+              <Link href="/fitness/connect" className="text-zinc-400 hover:text-white">Reconnect</Link>
+            </>
+          )}
+          {syncMsg && <span className="text-zinc-300">{syncMsg}</span>}
+          {syncState?.last_sync_error && <span className="text-amber-400">{syncState.last_sync_error}</span>}
+        </div>
+      )}
+
+      {banner && (
+        <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 px-4 py-2 rounded-lg text-sm">{banner}</div>
+      )}
 
       {isViewingOther && (
         <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm">

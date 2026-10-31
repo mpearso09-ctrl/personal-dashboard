@@ -42,6 +42,8 @@ export interface FitnessDaily {
   drinks_beer: number;
   drinks_spirits: number;
   notes: string | null;
+  /** Daily resting heart rate (bpm), filled by the Google Health sync. */
+  resting_heart_rate?: number | null;
   created_at: string;
 }
 
@@ -334,6 +336,8 @@ export interface TrainingSession {
   rest_sec: number | null;
   exercises: GymExercise[] | null;
   notes: string | null;
+  source?: string | null;
+  source_id?: string | null;
   created_at: string;
 }
 
