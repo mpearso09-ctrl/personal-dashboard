@@ -108,6 +108,82 @@ export function millimetersToKm(millimeters: number): number | null {
   return Math.round((millimeters / 1_000_000) * 100) / 100;
 }
 
+export type SampleClock = {
+  physicalTime?: string;
+  civilTime?: CivilDateTime;
+};
+
+/**
+ * Keep the latest positive reading on each calendar day in `timeZone`.
+ * A physical timestamp is converted into that zone, so a late-evening
+ * Halifax weigh-in stays on the Halifax date instead of the next UTC date.
+ */
+export function latestValuePerDay(
+  samples: { sampleTime?: SampleClock; value: number | null | undefined }[],
+  timeZone: string,
+  allowedDates: ReadonlySet<string>,
+): Map<string, number> {
+  const best = new Map<string, { order: number; value: number }>();
+  for (const sample of samples) {
+    const value = sample.value;
+    if (value == null || !Number.isFinite(value) || value <= 0) continue;
+    const placed = placeSample(sample.sampleTime, timeZone);
+    if (!placed || !allowedDates.has(placed.date)) continue;
+    const current = best.get(placed.date);
+    if (!current || placed.order >= current.order) {
+      best.set(placed.date, { order: placed.order, value });
+    }
+  }
+  return new Map(Array.from(best, ([date, row]) => [date, row.value]));
+}
+
+function placeSample(sampleTime: SampleClock | undefined, timeZone: string): { date: string; order: number } | null {
+  const physical = sampleTime?.physicalTime?.trim();
+  if (physical) {
+    const atMs = Date.parse(physical);
+    if (!Number.isNaN(atMs)) {
+      return { date: calendarDate(timeZone, new Date(atMs)), order: atMs };
+    }
+  }
+  const civil = sampleTime?.civilTime;
+  const date = ymdFromCivil(civil);
+  if (!date) return null;
+  const hours = civil?.time?.hours ?? 0;
+  const minutes = civil?.time?.minutes ?? 0;
+  const seconds = civil?.time?.seconds ?? 0;
+  return {
+    date,
+    order: zonedCivilToUtc(date, hours, minutes, seconds, timeZone),
+  };
+}
+
+/** UTC millis of a civil clock time in `timeZone`. */
+function zonedCivilToUtc(ymd: string, hours: number, minutes: number, seconds: number, timeZone: string): number {
+  const [year, month, day] = ymd.split('-').map(Number);
+  const wall = Date.UTC(year, month - 1, day, hours, minutes, seconds);
+  let utc = wall - timeZoneOffsetMs(timeZone, wall);
+  const crossed = timeZoneOffsetMs(timeZone, utc);
+  if (crossed !== timeZoneOffsetMs(timeZone, wall)) utc = wall - crossed;
+  return utc;
+}
+
+function timeZoneOffsetMs(timeZone: string, utcMs: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(utcMs));
+  const pick = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value);
+  const hour = pick('hour') === 24 ? 0 : pick('hour');
+  const asUtc = Date.UTC(pick('year'), pick('month') - 1, pick('day'), hour, pick('minute'), pick('second'));
+  return asUtc - utcMs;
+}
+
 export function pickNumber(record: Record<string, unknown> | undefined, ...keys: string[]): number | null {
   if (!record) return null;
   for (const key of keys) {

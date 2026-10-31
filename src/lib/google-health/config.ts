@@ -11,8 +11,17 @@ export const SCOPE_SLEEP = GOOGLE_HEALTH_SCOPES[1];
 export const SCOPE_METRICS = GOOGLE_HEALTH_SCOPES[2];
 export const SCOPE_SETTINGS = GOOGLE_HEALTH_SCOPES[3];
 
-/** First-party Fitbit / Google Health sources, including scale and app logs. */
+/** First-party Fitbit / Google Health sources. Steps, sleep, and workouts stay here. */
 export const DATA_SOURCE_FAMILY = 'users/me/dataSourceFamilies/google-sources';
+
+/**
+ * Every source on the Google Health account. Third-party scales are not in
+ * google-sources; they only show up in this family.
+ */
+export const ALL_DATA_SOURCES = 'users/me/dataSourceFamilies/all-sources';
+
+/** Weight and body fat are rewritten for this many days, including today. */
+export const BODY_METRIC_DAYS = 14;
 
 export const HEALTH_API_BASE = 'https://health.googleapis.com/v4';
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';

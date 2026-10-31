@@ -45,6 +45,20 @@ export type HealthDataPoint = {
     activeDuration?: string;
     metricsSummary?: Record<string, unknown>;
   };
+  weight?: {
+    sampleTime?: {
+      physicalTime?: string;
+      civilTime?: CivilDateTime;
+    };
+    weightGrams?: string | number;
+  };
+  bodyFat?: {
+    sampleTime?: {
+      physicalTime?: string;
+      civilTime?: CivilDateTime;
+    };
+    percentage?: string | number;
+  };
 };
 
 export type DailyRollupPoint = {
@@ -145,17 +159,19 @@ export async function listDataPoints(
   accessToken: string,
   dataType: string,
   filter: string,
-  options?: { reconcile?: boolean; pageSize?: number },
+  options?: { reconcile?: boolean; pageSize?: number; dataSourceFamily?: string; maxPages?: number },
 ): Promise<HealthDataPoint[]> {
   const points: HealthDataPoint[] = [];
   let pageToken: string | undefined;
   const method = options?.reconcile ? 'dataPoints:reconcile' : 'dataPoints';
   const pageSize = options?.pageSize ?? 25;
-  for (let page = 0; page < 5; page++) {
+  const family = options?.dataSourceFamily ?? DATA_SOURCE_FAMILY;
+  const maxPages = options?.maxPages ?? 5;
+  for (let page = 0; page < maxPages; page++) {
     const query = [
       `filter=${encodeURIComponent(filter)}`,
       `pageSize=${pageSize}`,
-      `dataSourceFamily=${encodeURIComponent(DATA_SOURCE_FAMILY)}`,
+      `dataSourceFamily=${encodeURIComponent(family)}`,
       pageToken ? `pageToken=${encodeURIComponent(pageToken)}` : '',
     ].filter(Boolean).join('&');
     const body = (await healthFetch(
