@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { toNumber } from '@/lib/utils';
 
 export const NUTRITION_MACROS = [
@@ -117,6 +118,77 @@ export function dayTotals(items: NutritionItem[], settings: NutritionSettings): 
       target: settings.targets[key] ?? null,
     };
   });
+}
+
+export type FitnessNutritionTotals = {
+  calories_consumed: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  fiber_g: number | null;
+};
+
+/** Sum of logged foods. Null when the day has no food items, so hand-entered days stay put. */
+export function fitnessTotalsFromItems(items: NutritionItem[]): FitnessNutritionTotals | null {
+  if (!items.length) return null;
+  const sum = (read: (item: NutritionItem) => number | null, digits: number, max: number) => {
+    let total = 0;
+    let any = false;
+    for (const item of items) {
+      const value = read(item);
+      if (value == null) continue;
+      total += value;
+      any = true;
+    }
+    if (!any) return null;
+    const factor = 10 ** digits;
+    return Math.min(max, Math.round(total * factor) / factor);
+  };
+  return {
+    calories_consumed: sum((item) => item.calories, 0, 1_000_000),
+    protein_g: sum((item) => item.protein_g, 1, 999.9),
+    carbs_g: sum((item) => item.carbs_g, 1, 999.9),
+    fat_g: sum((item) => item.fat_g, 1, 999.9),
+    fiber_g: sum((item) => item.fiber_g, 1, 999.9),
+  };
+}
+
+/**
+ * Writes the food-log totals onto fitness_daily. Days with no food items are left alone,
+ * including days that were typed in by hand before the food log existed.
+ */
+export async function syncFitnessNutritionFromFood(
+  supabase: SupabaseClient,
+  userId: string,
+  date: string,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('nutrition_items')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('date', date);
+  if (error) throw new Error(error.message);
+  const totals = fitnessTotalsFromItems(((data ?? []) as Record<string, unknown>[]).map(normalizeItem));
+  if (!totals) return;
+
+  const { data: existing, error: readError } = await supabase
+    .from('fitness_daily')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('date', date)
+    .maybeSingle();
+  if (readError) throw new Error(readError.message);
+  if (existing?.id) {
+    const { error: updateError } = await supabase.from('fitness_daily').update(totals).eq('id', existing.id);
+    if (updateError) throw new Error(updateError.message);
+    return;
+  }
+  const { error: insertError } = await supabase.from('fitness_daily').insert({
+    user_id: userId,
+    date,
+    ...totals,
+  });
+  if (insertError) throw new Error(insertError.message);
 }
 
 export function macroStatus(total: NutritionTotal): 'none' | 'ok' | 'off' {
