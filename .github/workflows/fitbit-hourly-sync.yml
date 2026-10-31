@@ -1,6 +1,6 @@
 # Pulls Fitbit through the production sync every hour.
-# This job must not send the daily email. The Vercel cron at 11:00 UTC
-# (about 7am in Halifax) calls the same URL without ?email=0 and sends the report.
+# This job must not send the daily email. The Vercel cron at 08:30 UTC
+# (4:30am in Halifax, Atlantic standard time) calls the same URL without ?email=0 and sends the report.
 #
 # Required repository secret:
 #   CRON_SECRET — the same value as the CRON_SECRET environment variable on Vercel.
@@ -9,7 +9,8 @@ name: Hourly Fitbit sync
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    # Minute 7, not 0. GitHub often delays or drops schedules that run at the top of the hour.
+    - cron: '7 * * * *'
   workflow_dispatch:
 
 permissions:
