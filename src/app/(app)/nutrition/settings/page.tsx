@@ -7,6 +7,7 @@ import { useAuth } from '@/components/auth-provider';
 import {
   NUTRITION_MACROS,
   normalizeSettings,
+  nutritionQueryMessage,
   type NutritionMacroKey,
   type NutritionSettings,
 } from '@/lib/nutrition';
@@ -22,8 +23,9 @@ export default function NutritionSettingsPage() {
     if (!user) return;
     supabase.from('nutrition_settings').select('tracked, targets').eq('user_id', user.id).maybeSingle()
       .then(({ data, error }) => {
-        if (error) {
-          setMessage('Nutrition settings are not in the database yet. Run the nutrition migration, then reload.');
+        const loadError = nutritionQueryMessage([error]);
+        if (loadError) {
+          setMessage(loadError);
           return;
         }
         setSettings(normalizeSettings(data));

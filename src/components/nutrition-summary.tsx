@@ -9,6 +9,7 @@ import {
   macroStatus,
   normalizeItem,
   normalizeSettings,
+  nutritionQueryMessage,
   type NutritionItem,
   type NutritionSettings,
   type NutritionTotal,
@@ -29,8 +30,9 @@ export function NutritionSummary({ userId, date, compact = false }: { userId: st
         supabase.from('nutrition_settings').select('tracked, targets').eq('user_id', userId).maybeSingle(),
       ]);
       if (cancel) return;
-      if (itemRes.error || settingRes.error) {
-        setError('Food log is not available yet.');
+      const loadError = nutritionQueryMessage([itemRes.error, settingRes.error]);
+      if (loadError) {
+        setError(loadError);
         setItems([]);
         setSettings(normalizeSettings(null));
         return;
