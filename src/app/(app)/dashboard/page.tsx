@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
 import { useHousehold } from '@/components/household-provider';
 import { FitnessSnapshot } from '@/components/fitness-snapshot';
+import { NutritionSummary } from '@/components/nutrition-summary';
 import { formatCurrency, getToday, getDayOfChallenge, shiftDate, APP_TIME_ZONE, cn, toNumber } from '@/lib/utils';
 import { fetchUsdCadRate, toCad } from '@/lib/fx';
 import { coerceFitnessDaily, coerceSession, metricsOf } from '@/lib/fitness-metrics';
@@ -313,6 +314,8 @@ function FitnessSection({
         todayMetrics={metricsOf(entries.find((entry) => entry.date === todayKey))}
         workouts={sessions}
       />
+
+      <NutritionSummary userId={viewUserId} date={todayKey} compact />
 
       {entries.length === 0 ? (
         <p className="text-zinc-500 text-sm">
