@@ -18,23 +18,24 @@ import {
   type NutritionMacroKey,
   type NutritionSettings,
 } from '@/lib/nutrition';
+import { commitTranscript, readSpeechResults } from '@/lib/speech-transcript';
 import { cn, getToday } from '@/lib/utils';
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string };
 
-type SpeechResult = { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> };
+type SpeechResultEvent = { results: ArrayLike<{ isFinal: boolean; 0?: { transcript?: string } }> };
 type SpeechRec = {
   lang: string;
   interimResults: boolean;
   continuous: boolean;
-  onresult: ((event: SpeechResult) => void) | null;
+  onresult: ((event: SpeechResultEvent) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
 };
 
-function recognition(): SpeechRec | null {
+function speechRecognition(): SpeechRec | null {
   if (typeof window === 'undefined') return null;
   const host = window as Window & {
     SpeechRecognition?: new () => SpeechRec;
@@ -44,9 +45,16 @@ function recognition(): SpeechRec | null {
   if (!Ctor) return null;
   const rec = new Ctor();
   rec.lang = 'en-CA';
-  rec.interimResults = true;
+  // iOS cuts continuous mode off after a short phrase. Restart on onend instead.
   rec.continuous = false;
+  rec.interimResults = true;
   return rec;
+}
+
+function recorderMime(): string {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const types = ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm'];
+  return types.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
 }
 
 export default function NutritionPage() {
@@ -61,13 +69,22 @@ export default function NutritionPage() {
   const [settings, setSettings] = useState<NutritionSettings>(normalizeSettings(null));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
-  const [interim, setInterim] = useState('');
+  const [live, setLive] = useState('');
   const [listening, setListening] = useState(false);
-  const [voiceNote, setVoiceNote] = useState('');
+  const [recordingMode, setRecordingMode] = useState<'speech' | 'audio' | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
+  const listeningRef = useRef(false);
+  const pageAliveRef = useRef(true);
+  const sendingRef = useRef(false);
+  const dateRef = useRef(date);
+  const committedRef = useRef('');
+  const sessionFinalRef = useRef('');
+  const sessionInterimRef = useRef('');
   const recRef = useRef<SpeechRec | null>(null);
+  const mediaRef = useRef<{ recorder: MediaRecorder; stream: MediaStream } | null>(null);
+  dateRef.current = date;
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -89,77 +106,225 @@ export default function NutritionPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  useEffect(() => () => { recRef.current?.stop(); }, []);
+  const publishLive = useCallback(() => {
+    setLive(commitTranscript(committedRef.current, sessionFinalRef.current, sessionInterimRef.current));
+  }, []);
 
-  function toggleMic() {
-    if (listening) {
-      recRef.current?.stop();
-      setListening(false);
+  const submitMessage = useCallback(async (message: string) => {
+    const text = message.trim();
+    if (!text) {
+      setError('Nothing was captured. Tap the mic, speak the meal, then tap stop.');
       return;
     }
-    const rec = recognition();
-    if (!rec) {
-      setVoiceNote('This browser has no speech recognition. Type the meal instead. Chrome on Android and Safari on iPhone usually have the mic.');
-      return;
-    }
-    setVoiceNote('');
-    rec.onresult = (event) => {
-      let finalText = '';
-      let live = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const piece = event.results[i][0]?.transcript ?? '';
-        if (event.results[i].isFinal) finalText += piece;
-        else live += piece;
-      }
-      if (finalText.trim()) {
-        setDraft((current) => `${current ? `${current.trim()} ` : ''}${finalText.trim()}`);
-        setInterim('');
-      } else {
-        setInterim(live);
-      }
-    };
-    rec.onerror = () => {
-      setListening(false);
-      setVoiceNote('The microphone did not start. Check permission, or type the meal.');
-    };
-    rec.onend = () => setListening(false);
-    try {
-      rec.start();
-      recRef.current = rec;
-      setListening(true);
-    } catch {
-      setVoiceNote('The microphone did not start. Check permission, or type the meal.');
-    }
-  }
-
-  const pending = `${draft}${interim ? `${draft ? ' ' : ''}${interim}` : ''}`.trim();
-
-  async function send(event?: React.FormEvent) {
-    event?.preventDefault();
-    const message = pending;
-    if (!message || sending || !user) return;
+    if (sendingRef.current || !user) return;
+    sendingRef.current = true;
     setSending(true);
     setError('');
     setDraft('');
-    setInterim('');
+    setLive('');
     try {
       const res = await fetch('/api/nutrition/log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, date }),
+        body: JSON.stringify({ message: text, date: dateRef.current }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setDraft(message);
+        setDraft(text);
         setError(body.error || 'Could not log that meal.');
       }
       await load();
     } catch {
-      setDraft(message);
+      setDraft(text);
       setError('Could not reach the food parser.');
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
+  }, [load, user]);
+
+  const finishSpeech = useCallback((submit: boolean) => {
+    committedRef.current = commitTranscript(committedRef.current, sessionFinalRef.current, sessionInterimRef.current);
+    sessionFinalRef.current = '';
+    sessionInterimRef.current = '';
+    const text = committedRef.current.trim();
+    publishLive();
+    if (!submit) return;
+    committedRef.current = '';
+    setLive('');
+    void submitMessage(text);
+  }, [publishLive, submitMessage]);
+
+  const startSpeech = useCallback(() => {
+    const rec = speechRecognition();
+    if (!rec) return false;
+    rec.onresult = (event) => {
+      const pieces = Array.from(event.results).map((result) => ({
+        isFinal: result.isFinal,
+        transcript: result[0]?.transcript ?? '',
+      }));
+      const spoken = readSpeechResults(pieces);
+      sessionFinalRef.current = spoken.finalText;
+      sessionInterimRef.current = spoken.interim;
+      publishLive();
+    };
+    rec.onerror = (event) => {
+      if (event.error === 'aborted' || event.error === 'no-speech') return;
+      if (event.error === 'not-allowed') {
+        listeningRef.current = false;
+        setListening(false);
+        setError('Microphone permission was blocked. Allow the mic for this site, or type the meal.');
+      }
+    };
+    rec.onend = () => {
+      if (!pageAliveRef.current) return;
+      const keepGoing = listeningRef.current;
+      finishSpeech(false);
+      if (!keepGoing) {
+        finishSpeech(true);
+        return;
+      }
+      try {
+        rec.start();
+      } catch {
+        window.setTimeout(() => {
+          if (!listeningRef.current || !pageAliveRef.current) return;
+          try {
+            rec.start();
+          } catch {
+            listeningRef.current = false;
+            setListening(false);
+            finishSpeech(true);
+          }
+        }, 200);
+      }
+    };
+    try {
+      rec.start();
+    } catch {
+      return false;
+    }
+    recRef.current = rec;
+    return true;
+  }, [finishSpeech, publishLive]);
+
+  const uploadRecording = useCallback(async (blob: Blob) => {
+    if (!user) return;
+    sendingRef.current = true;
+    setSending(true);
+    setError('');
+    try {
+      const form = new FormData();
+      form.set('audio', blob, blob.type.includes('webm') ? 'meal.webm' : 'meal.m4a');
+      form.set('date', dateRef.current);
+      const res = await fetch('/api/nutrition/transcribe', { method: 'POST', body: form });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (typeof body.transcript === 'string' && body.transcript.trim()) setDraft(body.transcript.trim());
+        setError(body.error || 'Could not transcribe that recording.');
+        return;
+      }
+      setDraft('');
+      setLive('');
+      await load();
+    } catch {
+      setError('Could not upload the recording.');
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }, [load, user]);
+
+  const startAudioRecording = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setError('This browser cannot record audio. Type what you ate instead.');
+      return false;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = recorderMime();
+      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/mp4' });
+        mediaRef.current = null;
+        if (!pageAliveRef.current) return;
+        if (!blob.size) {
+          setError('No audio was captured. Tap the mic and try again.');
+          return;
+        }
+        void uploadRecording(blob);
+      };
+      recorder.start();
+      mediaRef.current = { recorder, stream };
+      setRecordingMode('audio');
+      return true;
+    } catch {
+      setError('Microphone permission was blocked. Allow the mic for this site, or type the meal.');
+      return false;
+    }
+  }, [uploadRecording]);
+
+  function stopRecording() {
+    listeningRef.current = false;
+    setListening(false);
+    if (recRef.current) {
+      try { recRef.current.stop(); } catch { finishSpeech(true); }
+      recRef.current = null;
+      return;
+    }
+    const media = mediaRef.current;
+    if (media && media.recorder.state !== 'inactive') {
+      media.recorder.stop();
+      return;
+    }
+    finishSpeech(true);
+  }
+
+  async function startRecording() {
+    setError('');
+    committedRef.current = draft.trim();
+    sessionFinalRef.current = '';
+    sessionInterimRef.current = '';
+    listeningRef.current = true;
+    setListening(true);
+    publishLive();
+    if (startSpeech()) {
+      setRecordingMode('speech');
+      return;
+    }
+    const started = await startAudioRecording();
+    if (!started) {
+      listeningRef.current = false;
+      setListening(false);
+      setRecordingMode(null);
+    }
+  }
+
+  useEffect(() => () => {
+    pageAliveRef.current = false;
+    listeningRef.current = false;
+    try { recRef.current?.stop(); } catch { /* already stopped */ }
+    const media = mediaRef.current;
+    media?.stream.getTracks().forEach((track) => track.stop());
+    if (media && media.recorder.state !== 'inactive') {
+      try { media.recorder.stop(); } catch { /* already stopped */ }
+    }
+  }, []);
+
+  function toggleMic() {
+    if (listeningRef.current) stopRecording();
+    else void startRecording();
+  }
+
+  function send(event?: React.FormEvent) {
+    event?.preventDefault();
+    if (listeningRef.current) stopRecording();
+    else void submitMessage(draft);
   }
 
   async function removeItem(id: string, name: string) {
@@ -288,21 +453,39 @@ export default function NutritionPage() {
             type="button"
             onClick={toggleMic}
             aria-pressed={listening}
-            aria-label={listening ? 'Stop microphone' : 'Speak what you ate'}
+            aria-label={listening ? 'Stop recording and save' : 'Start recording'}
             className={cn(
-              'h-11 w-11 shrink-0 rounded-xl flex items-center justify-center',
+              'h-11 px-3 shrink-0 rounded-xl flex items-center justify-center gap-2 text-sm font-medium',
               listening ? 'bg-rose-600 text-white' : 'bg-zinc-800 text-zinc-200',
             )}
           >
             {listening ? <Square className="h-4 w-4" /> : <Mic className="h-5 w-5" />}
+            {listening ? 'Stop' : 'Mic'}
           </button>
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
+            {listening && (
+              <div role="status" className="mb-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2">
+                <div className="text-xs font-medium text-rose-200">
+                  {recordingMode === 'audio' ? 'Recording audio' : 'Recording'} — tap Stop to save
+                </div>
+                <p className="text-sm text-white mt-1">{live || 'Listening…'}</p>
+              </div>
+            )}
+            {error && (
+              <div role="alert" className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                {error}
+              </div>
+            )}
+            {sending && !error && (
+              <p className="mb-2 text-xs text-zinc-400">Saving what you said…</p>
+            )}
             <label htmlFor="food-draft" className="sr-only">What you ate</label>
             <textarea
               id="food-draft"
               rows={2}
-              value={interim ? `${draft}${draft ? ' ' : ''}${interim}` : draft}
-              onChange={(event) => { setDraft(event.target.value); setInterim(''); }}
+              readOnly={listening}
+              value={listening ? live : draft}
+              onChange={(event) => { if (!listening) setDraft(event.target.value); }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault();
@@ -310,17 +493,12 @@ export default function NutritionPage() {
                 }
               }}
               placeholder="Here's what I ate today: 2 eggs, toast with butter…"
-              className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 read-only:opacity-80"
             />
-            {(voiceNote || error || sending) && (
-              <p className={cn('mt-1 text-xs', error ? 'text-amber-300' : 'text-zinc-500')}>
-                {error || voiceNote || (sending ? 'Estimating…' : '')}
-              </p>
-            )}
           </div>
           <button
             type="submit"
-            disabled={sending || !pending}
+            disabled={sending || (!listening && !draft.trim())}
             aria-label="Log this food"
             className="h-11 w-11 shrink-0 rounded-xl bg-blue-600 text-white flex items-center justify-center disabled:opacity-40"
           >
