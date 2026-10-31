@@ -1,6 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/supabase-admin';
+import { APP_TIME_ZONE } from '@/lib/utils';
 import {
+  ALL_DATA_SOURCES,
+  BODY_METRIC_DAYS,
   configuredTimezone,
   hasScope,
   isValidTimeZone,
@@ -27,9 +30,11 @@ import {
   gramsToPounds,
   millimetersToKm,
   minutesToHours,
+  latestValuePerDay,
   num,
   pickNumber,
   sessionCivilDate,
+  type SampleClock,
   ymdFromCivil,
   ymdFromGoogleDate,
 } from './parse';
@@ -156,23 +161,25 @@ export async function syncGoogleHealthUser(userId: string, options: SyncOptions 
   }
 
   if (allow(SCOPE_METRICS)) {
+    // google-sources drops third-party scales. These two types are samples,
+    // so the latest reading on each Halifax day is the one the scale just wrote.
+    const bodyToday = calendarDate(APP_TIME_ZONE);
+    const bodyDates = recentDates(bodyToday, BODY_METRIC_DAYS);
+    const bodyWindow = new Set(bodyDates);
+    const queryStart = addCalendarDays(bodyDates[0], -1);
+    const queryEnd = addCalendarDays(bodyToday, 2);
+    const sampleFilter = (field: 'weight' | 'body_fat') =>
+      `${field}.sample_time.civil_time >= "${queryStart}T00:00:00" AND ${field}.sample_time.civil_time < "${queryEnd}T00:00:00"`;
+    const sampleOptions = { dataSourceFamily: ALL_DATA_SOURCES, pageSize: 500, maxPages: 10 };
     await tryMetric('weight', skipped, async () => {
-      const points = await dailyRollUp(accessToken, 'weight', yesterday, endExclusive);
-      for (const point of points) {
-        const date = ymdFromCivil(point.civilStartTime);
-        const grams = pickNumber(point.weight, 'weightGramsAvg', 'weight_grams_avg');
-        if (!date || !window.has(date) || grams == null || grams <= 0) continue;
-        touch(date).weight_lbs = gramsToPounds(grams);
-      }
+      const points = await listDataPoints(accessToken, 'weight', sampleFilter('weight'), sampleOptions);
+      const byDay = latestValuePerDay(points.map((point) => sampleReading(point.weight, 'weightGrams', 'weight_grams')), APP_TIME_ZONE, bodyWindow);
+      for (const [date, grams] of byDay) touch(date).weight_lbs = gramsToPounds(grams);
     });
     await tryMetric('body fat', skipped, async () => {
-      const points = await dailyRollUp(accessToken, 'body-fat', yesterday, endExclusive);
-      for (const point of points) {
-        const date = ymdFromCivil(point.civilStartTime);
-        const pct = pickNumber(point.bodyFat, 'bodyFatPercentageAvg', 'body_fat_percentage_avg');
-        if (!date || !window.has(date) || pct == null || pct <= 0) continue;
-        touch(date).body_fat_pct = Math.round(pct * 10) / 10;
-      }
+      const points = await listDataPoints(accessToken, 'body-fat', sampleFilter('body_fat'), sampleOptions);
+      const byDay = latestValuePerDay(points.map((point) => sampleReading(point.bodyFat, 'percentage')), APP_TIME_ZONE, bodyWindow);
+      for (const [date, pct] of byDay) touch(date).body_fat_pct = Math.round(pct * 10) / 10;
     });
     await tryMetric('resting heart rate', skipped, async () => {
       const points = await listDataPoints(
@@ -225,7 +232,8 @@ export async function syncGoogleHealthUser(userId: string, options: SyncOptions 
   }
 
   try {
-    for (const date of [yesterday, today]) {
+    const datesToWrite = new Set<string>([yesterday, today, ...days.keys()]);
+    for (const date of [...datesToWrite].sort()) {
       await writeDay(admin, userId, date, days.get(date) ?? {}, workoutDates.has(date));
     }
   } catch (err) {
@@ -343,6 +351,19 @@ async function tryMetric(label: string, skipped: string[], run: () => Promise<vo
     const message = err instanceof Error ? err.message : 'request failed';
     skipped.push(`${label}: ${message}`);
   }
+}
+
+function recentDates(today: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => addCalendarDays(today, index - (count - 1)));
+}
+
+function sampleReading(
+  record: object | undefined,
+  ...valueKeys: string[]
+): { sampleTime?: SampleClock; value: number | null } {
+  const raw = record as Record<string, unknown> | undefined;
+  const sampleTime = (raw?.sampleTime ?? raw?.sample_time) as SampleClock | undefined;
+  return { sampleTime, value: pickNumber(raw, ...valueKeys) };
 }
 
 function sleepHours(points: HealthDataPoint[], window: Set<string>): Map<string, number> {

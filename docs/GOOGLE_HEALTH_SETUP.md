@@ -158,15 +158,15 @@ The automatic job is already in `vercel.json`. On the Hobby plan it runs once a 
 
 ## What the sync does, and what it skips
 
-It asks Google Health for **yesterday and today** only, in your time zone.
+It asks Google Health for **yesterday and today** only, in your time zone. Weight and body fat are the exception: each sync rewrites the last 14 days, including today, using the latest sample per day in Halifax time, from every source on the Google Health account.
 
 | Dashboard field | Google Health data |
 | --- | --- |
 | Steps | Daily rollup of `steps` (`countSum`) |
 | Calories burned | Daily rollup of `total-calories` (`kcalSum`). This is Fitbit’s full burn, including the calories you use at rest, which is the number Fitbit shows as calories out. |
 | Sleep hours | Main sleep `minutesAsleep`, on the morning you woke up, converted to hours. Naps are left out when a main sleep exists. |
-| Weight | Daily average grams, converted to pounds |
-| Body fat | Daily average percent. Only appears if a scale or a manual log exists in Google Health. |
+| Weight | Latest `weight` sample each day, from any source (Fitbit or a third-party scale). Grams are converted to pounds. |
+| Body fat | Latest `body-fat` percentage each day, from any source. |
 | Resting heart rate | `daily-resting-heart-rate` beats per minute. Not a live pulse. It can be missing until the watch has enough data. |
 | Workouts | Exercise sessions. Runs, walks, CrossFit-style sessions, and anything with “HYROX” in the name are mapped to those types. Other real workouts are saved as Gym. A second sync updates the same row instead of adding another. |
 | Workout tick | Turned on for a day that received a workout. It is never turned back off, so a workout you logged by hand stays ticked. |
@@ -178,7 +178,7 @@ These are not imported, on purpose:
 - Blood oxygen, heart-rate variability, active zone minutes, ECG
 - Max heart rate on a workout (the exercise summary has an average, not a max)
 - Chores and similar logs (cleaning, gardening, fishing, and the like)
-- Data that came only from an outside app. The sync uses Google and Fitbit sources, including the Fitbit app and Health Connect, not every third-party app.
+- Steps, sleep, heart rate, and workouts that came only from an outside app. Those stay on Google and Fitbit sources. Weight and body fat do include third-party scales.
 
 A workout deleted in Fitbit stays in Training. Delete it there if you do not want it.
 
