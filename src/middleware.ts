@@ -29,11 +29,17 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/api/auth')
-  ) {
+  const pathname = request.nextUrl.pathname;
+  // The daily job checks CRON_SECRET itself. Google sends the owner back to
+  // the callback without an API session header, so that route checks the
+  // dashboard cookie on its own.
+  const isPublic =
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/api/auth') ||
+    pathname.startsWith('/api/cron') ||
+    pathname === '/api/google-health/callback';
+
+  if (!user && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     return NextResponse.redirect(url);

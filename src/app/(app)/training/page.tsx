@@ -59,7 +59,16 @@ function summary(s: TrainingSession): string {
     return `${s.distance_km ?? '—'} km · ${fmtTime(s.duration_min)} · ${fmtPace(pace(s.duration_min, s.distance_km))}`;
   }
   if (s.type === 'walk') return `${s.distance_km ?? '—'} km · ${fmtTime(s.duration_min)}${s.avg_hr ? ` · ${s.avg_hr} bpm` : ''}`;
-  if (s.type === 'gym') { const ex = s.exercises ?? []; const done = ex.reduce((a, e) => a + e.done.filter(Boolean).length, 0); const tot = ex.reduce((a, e) => a + e.target_sets, 0); return `${done}/${tot} sets`; }
+  if (s.type === 'gym') {
+    const ex = s.exercises ?? [];
+    if (!ex.length) {
+      const bits = [s.duration_min ? fmtTime(s.duration_min) : null, s.notes?.replace(/^Fitbit · /, '') || null].filter(Boolean);
+      return bits.join(' · ') || 'Workout';
+    }
+    const done = ex.reduce((a, e) => a + e.done.filter(Boolean).length, 0);
+    const tot = ex.reduce((a, e) => a + e.target_sets, 0);
+    return `${done}/${tot} sets`;
+  }
   return `${s.duration_min ? fmtTime(s.duration_min) : '—'}${s.rpe ? ` · RPE ${s.rpe}` : ''}${s.subtype === 'hyrox_class' ? ' · HYROX class' : ''}`;
 }
 
@@ -330,7 +339,7 @@ export default function TrainingPage() {
               {n > 0 && <span className="absolute top-1.5 right-1.5 h-5 w-5 rounded-full bg-emerald-500 text-black text-[11px] font-bold flex items-center justify-center">{n}</span>}
             </button>); })}</div>
           {dateSessions.length > 0 && <div className="mt-3 space-y-1">{dateSessions.map((s) => { const T = typeOf(s.type); const I = T.icon; return (
-            <div key={s.id} className="flex items-center gap-2 text-sm bg-zinc-800/60 rounded-lg px-3 py-2"><I className={cn('h-4 w-4', T.color)} /><span className="text-white">{T.label}{s.subtype ? ` · ${RUN_SUBTYPES.find((r) => r.key === s.subtype)?.label ?? (s.subtype === 'hyrox_class' ? 'HYROX class' : '')}` : ''}</span><span className="text-zinc-400 ml-auto tabular-nums">{summary(s)}</span></div>); })}</div>}
+            <div key={s.id} className="flex items-center gap-2 text-sm bg-zinc-800/60 rounded-lg px-3 py-2"><I className={cn('h-4 w-4', T.color)} /><span className="text-white">{T.label}{s.subtype ? ` · ${RUN_SUBTYPES.find((r) => r.key === s.subtype)?.label ?? (s.subtype === 'hyrox_class' ? 'HYROX class' : '')}` : ''}{s.source === 'google_health' ? ' · Fitbit' : ''}</span><span className="text-zinc-400 ml-auto tabular-nums">{summary(s)}</span></div>); })}</div>}
         </Card>
       )}
 
@@ -395,7 +404,7 @@ export default function TrainingPage() {
             <div key={s.id}>
               <button onClick={() => setExpanded(open ? null : s.id)} className="w-full flex items-center gap-3 py-2.5 text-left">
                 <div className={cn('h-9 w-9 rounded-lg border flex items-center justify-center shrink-0', T.bg)}><I className={cn('h-4 w-4', T.color)} /></div>
-                <div className="flex-1 min-w-0"><div className="text-sm text-white">{T.label}{s.type === 'run' && s.subtype ? ` · ${RUN_SUBTYPES.find((r) => r.key === s.subtype)?.label}` : s.subtype === 'hyrox_class' ? ' · HYROX class' : ''}</div><div className="text-xs text-zinc-500 truncate">{summary(s)}</div></div>
+                <div className="flex-1 min-w-0"><div className="text-sm text-white">{T.label}{s.type === 'run' && s.subtype ? ` · ${RUN_SUBTYPES.find((r) => r.key === s.subtype)?.label}` : s.subtype === 'hyrox_class' ? ' · HYROX class' : ''}{s.source === 'google_health' ? ' · Fitbit' : ''}</div><div className="text-xs text-zinc-500 truncate">{summary(s)}</div></div>
                 <div className="text-xs text-zinc-500 shrink-0">{shortDate(s.date)}</div>
               </button>
               {open && (
