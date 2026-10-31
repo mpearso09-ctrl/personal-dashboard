@@ -12,6 +12,7 @@ import {
   macroStatus,
   normalizeItem,
   normalizeSettings,
+  nutritionQueryMessage,
   syncFitnessNutritionFromFood,
   type NutritionItem,
   type NutritionMacroKey,
@@ -75,8 +76,9 @@ export default function NutritionPage() {
       supabase.from('nutrition_settings').select('tracked, targets').eq('user_id', user.id).maybeSingle(),
       supabase.from('nutrition_messages').select('id, role, content').eq('user_id', user.id).eq('date', date).order('created_at'),
     ]);
-    if (itemRes.error || settingRes.error || messageRes.error) {
-      setError('The food log tables are not in the database yet. Run the nutrition migration, then reload.');
+    const loadError = nutritionQueryMessage([itemRes.error, settingRes.error, messageRes.error]);
+    if (loadError) {
+      setError(loadError);
       return;
     }
     setError('');

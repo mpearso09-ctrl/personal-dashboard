@@ -97,6 +97,25 @@ export function formatMacro(key: NutritionMacroKey, value: number | null): strin
   return rounded.toLocaleString('en-CA', { maximumFractionDigits: 1 });
 }
 
+type QueryError = { code?: string; message?: string } | null | undefined;
+
+const MISSING_TABLE = 'The food log tables are not in the database yet. Run the nutrition migration, then reload.';
+
+/** PostgREST 42P01 / PGRST205 only. Other failures must keep their real message. */
+export function isMissingNutritionRelation(error: QueryError): boolean {
+  if (!error) return false;
+  if (error.code === '42P01' || error.code === 'PGRST205') return true;
+  const message = error.message ?? '';
+  return /could not find the table/i.test(message) || /relation ["']?.+["']? does not exist/i.test(message);
+}
+
+export function nutritionQueryMessage(errors: QueryError[]): string | null {
+  const present = errors.filter((error): error is { code?: string; message?: string } => Boolean(error));
+  if (!present.length) return null;
+  if (present.every(isMissingNutritionRelation)) return MISSING_TABLE;
+  return present.map((error) => error.message?.trim()).filter(Boolean).join(' ') || 'Could not load the food log.';
+}
+
 export function dayTotals(items: NutritionItem[], settings: NutritionSettings): NutritionTotal[] {
   return settings.tracked.map((key) => {
     const macro = macroByKey(key);
