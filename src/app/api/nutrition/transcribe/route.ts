@@ -35,7 +35,12 @@ export async function POST(request: Request) {
   try {
     const bytes = new Uint8Array(await audio.arrayBuffer());
     const result = await transcribeAndLogFood(supabase, user.id, date, bytes);
-    return NextResponse.json({ ok: true, transcript: result.transcript, reply: result.reply });
+    return NextResponse.json({
+      ok: true,
+      transcript: result.transcript,
+      reply: result.reply,
+      pending: result.pending,
+    });
   } catch (err) {
     console.error('nutrition transcribe failed', err instanceof Error ? err.message : err);
     return NextResponse.json({ error: nutritionAiError(err) }, { status: 502 });

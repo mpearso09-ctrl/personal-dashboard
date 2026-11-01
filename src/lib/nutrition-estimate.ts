@@ -1,7 +1,7 @@
 /**
- * Offline meal estimate used when the AI Gateway cannot parse a transcript.
- * Values are ordinary home servings, not a lab analysis. The same planner
- * turns either these estimates or a model object into nutrition_items writes.
+ * Home-serving estimates and the planner that turns a model object into
+ * nutrition_items writes. A live model failure does not write these rows;
+ * the transcript stays pending until Re-run.
  */
 
 export type FoodOp = 'add' | 'update' | 'delete';
