@@ -124,7 +124,7 @@ export async function syncGoogleHealthUser(userId: string, options: SyncOptions 
 
   const skipped: string[] = [];
   const warning = refreshWarning(refreshExpires);
-  const timeZone = await resolveTimeZone(accessToken, scopes);
+  const timeZone = await resolveTimeZone(admin, userId, accessToken, scopes);
   const today = calendarDate(timeZone);
   const yesterday = addCalendarDays(today, -1);
   const endExclusive = addCalendarDays(today, 1);
@@ -315,7 +315,15 @@ async function ensureAccessToken(admin: SupabaseClient, row: TokenRow) {
   };
 }
 
-async function resolveTimeZone(accessToken: string, scopes: string | null): Promise<string> {
+async function resolveTimeZone(
+  admin: SupabaseClient,
+  userId: string,
+  accessToken: string,
+  scopes: string | null,
+): Promise<string> {
+  const override = await storedTimeZone(admin, userId);
+  if (override) return override;
+
   const fallback = configuredTimezone();
   if (scopes && !hasScope(scopes, SCOPE_SETTINGS)) return fallback;
   try {
@@ -325,6 +333,17 @@ async function resolveTimeZone(accessToken: string, scopes: string | null): Prom
     // Settings are only used to choose yesterday/today. The env fallback is enough.
   }
   return fallback;
+}
+
+async function storedTimeZone(admin: SupabaseClient, userId: string): Promise<string | null> {
+  const { data, error } = await admin
+    .from('fitness_sync_state')
+    .select('timezone')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const timeZone = typeof data.timezone === 'string' ? data.timezone.trim() : '';
+  return timeZone && isValidTimeZone(timeZone) ? timeZone : null;
 }
 
 function refreshWarning(expiresAt: string | null): string | null {
