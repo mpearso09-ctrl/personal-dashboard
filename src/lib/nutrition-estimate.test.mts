@@ -54,6 +54,40 @@ test('corrections are not invented as new foods when the model is down', () => {
   assert.equal(fallbackFoodLog('actually delete the eggs'), null);
 });
 
+test('a group add with no nutrition is not saved beside the ingredients', () => {
+  const plan = planNutritionChanges([], [
+    {
+      op: 'add',
+      id: null,
+      name: 'Fried eggs',
+      quantity: '3',
+      calories: 216,
+      protein_g: 18.9,
+      fat_g: 14.4,
+      carbs_g: 1.2,
+      fiber_g: 0,
+      sugar_g: 0.6,
+      sodium_mg: 213,
+    },
+    {
+      op: 'add',
+      id: null,
+      name: 'Eggs',
+      quantity: '1 serving',
+      calories: null,
+      protein_g: null,
+      fat_g: null,
+      carbs_g: null,
+      fiber_g: null,
+      sugar_g: null,
+      sodium_mg: null,
+    },
+  ]);
+  assert.deepEqual(plan.inserts.map((row) => row.name), ['Fried eggs']);
+  assert.equal(plan.updates.length, 0);
+  assert.equal(plan.deletes.length, 0);
+});
+
 test('an update still targets the existing food id', () => {
   const plan = planNutritionChanges(
     [{ id: 'egg-1', name: 'Egg' }],

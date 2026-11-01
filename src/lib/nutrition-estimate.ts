@@ -161,6 +161,7 @@ export function planNutritionChanges(
       continue;
     }
     if (!patch.name) continue;
+    if (MACRO_KEYS.every((key) => patch[key] == null)) continue;
     inserts.push(patch);
   }
   return { inserts, updates, deletes };

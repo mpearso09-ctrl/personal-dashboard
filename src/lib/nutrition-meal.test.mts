@@ -43,6 +43,7 @@ test('the breakfast fixture yields every food and quantity', () => {
     assert.ok(instructions.includes(item.name), item.name);
     assert.ok(instructions.includes(item.quantity), item.quantity);
   }
+  assert.match(instructions, /Do not add a group or summary row when you list the ingredients separately/);
 });
 
 test('a collapsed model reply still keeps every fixture food', () => {
