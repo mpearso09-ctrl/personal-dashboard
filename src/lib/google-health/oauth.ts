@@ -1,9 +1,11 @@
 import {
+  CALENDAR_OAUTH_PREFIX,
+  CALENDAR_READONLY_SCOPE,
   GOOGLE_AUTH_URL,
   GOOGLE_HEALTH_SCOPES,
   GOOGLE_TOKEN_URL,
   googleHealthRedirectUri,
-} from './config';
+} from './config.ts';
 
 export type GoogleTokenResponse = {
   access_token: string;
@@ -23,19 +25,45 @@ export class GoogleOAuthError extends Error {
   }
 }
 
-export function buildAuthUrl(state: string): string {
+type AuthUrlOptions = {
+  scopes?: readonly string[];
+  /** Health consent keeps previously granted scopes. Calendar consent does not. */
+  includeGrantedScopes?: boolean;
+};
+
+export function buildAuthUrl(state: string, options?: AuthUrlOptions): string {
   const clientId = requiredEnv('GOOGLE_CLIENT_ID');
+  const scopes = options?.scopes ?? GOOGLE_HEALTH_SCOPES;
+  const includeGrantedScopes = options?.includeGrantedScopes !== false;
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: googleHealthRedirectUri(),
     response_type: 'code',
     access_type: 'offline',
     prompt: 'consent',
-    include_granted_scopes: 'true',
-    scope: GOOGLE_HEALTH_SCOPES.join(' '),
+    scope: scopes.join(' '),
     state,
   });
+  if (includeGrantedScopes) params.set('include_granted_scopes', 'true');
   return `${GOOGLE_AUTH_URL}?${params.toString()}`;
+}
+
+/**
+ * Calendar consent reuses the Fitbit redirect URI and OAuth client, but it
+ * asks only for calendar.readonly and does not send include_granted_scopes.
+ * The consent screen therefore does not invite Mike to untick Fitbit access,
+ * and the new refresh token is stored in google_calendar_tokens, not in
+ * google_health_tokens.
+ */
+export function buildCalendarAuthUrl(state: string): string {
+  return buildAuthUrl(state, {
+    scopes: [CALENDAR_READONLY_SCOPE],
+    includeGrantedScopes: false,
+  });
+}
+
+export function isCalendarOAuthState(state: string | null | undefined): boolean {
+  return typeof state === 'string' && state.startsWith(CALENDAR_OAUTH_PREFIX);
 }
 
 export async function exchangeAuthCode(code: string): Promise<GoogleTokenResponse> {

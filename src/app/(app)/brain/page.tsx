@@ -1,850 +1,358 @@
 'use client';
-// src/app/(app)/brain/page.tsx  (Brain Dashboard v3)
-// The daily operating board. Top to bottom:
-//   Scoreboard (donut + urgency + 7-day trend) → Today (calendar) → Open Projects
-//   → To-Do (unified: todos + decisions + commitments + people) → Key insights
-//   → Context questions.
-// Reads/writes brain_items + brain_briefings directly via the browser Supabase
-// client. RLS allows the household owner and members (v19). No API route,
-// no service-role key.
+// Brain is two things: open action items, and today's Halifax calendar.
+//
+// "Draft a reply" asks /api/brain/draft for a suggested reply from the AI
+// Gateway (AI_GATEWAY_MODEL) and shows it in a copy box. The route has no
+// mail client. Nothing on this page can send email. The Gmail deep-link
+// alternative was not used, and rows are never marked "drafting" — that
+// status is not in the action_items check constraint.
+//
+// brain_items and brain_briefings stay in the database. This view does not
+// read them.
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
-import { useHousehold } from '@/components/household-provider';
+import { actionAge, groupActionItems, type ActionItem } from '@/lib/action-items';
+import { HALIFAX_TIME_ZONE } from '@/lib/zoned-day';
+import { cn } from '@/lib/utils';
 
-/* ---------------------------------- types --------------------------------- */
+type CalendarEvent = { id: string; title: string; when: string; allDay: boolean };
 
-type Item = {
-  id: string;
-  item_key: string;
-  kind: string;
-  title: string;
-  detail: string | null;
-  project: string | null;
-  owner: string | null;
-  start_date: string | null;
-  due_by: string | null;
-  status: string;
-  done: boolean;
-  comment: string | null;
-  out_to: boolean;
-  out_to_who: string | null;
-  needs_due_date: boolean;
-  notes: string | null;
-  source: string;
-  sort_order: number;
-};
+type CalendarState =
+  | { status: 'loading' }
+  | { status: 'ready'; connected: boolean; events: CalendarEvent[]; reason?: string };
 
-type Briefing = {
-  headline: string;
-  summary_md: string;
-  briefing_date: string | null;
-};
+type DraftState =
+  | { status: 'writing' }
+  | { status: 'ready'; text: string; copied: boolean; copyError?: string }
+  | { status: 'error'; message: string };
 
-/* --------------------------------- helpers -------------------------------- */
-
-function todayISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate()
-  ).padStart(2, '0')}`;
+function subscribeNoop() {
+  return () => {};
 }
 
-type Urgency = 'overdue' | 'today' | 'week' | 'later' | 'none';
-
-function urgency(due: string | null, done: boolean): Urgency {
-  if (done || !due) return 'none';
-  const t = todayISO();
-  if (due < t) return 'overdue';
-  if (due === t) return 'today';
-  const week = new Date();
-  week.setDate(week.getDate() + 7);
-  const w = `${week.getFullYear()}-${String(week.getMonth() + 1).padStart(2, '0')}-${String(
-    week.getDate()
-  ).padStart(2, '0')}`;
-  return due <= w ? 'week' : 'later';
+function readCalendarBanner() {
+  const code = new URLSearchParams(window.location.search).get('calendar') ?? '';
+  return CALENDAR_BANNER[code] ?? '';
 }
 
-const URGENCY_META: Record<Urgency, { label: string; chip: string; bar: string }> = {
-  overdue: { label: 'Overdue', chip: 'bg-red-100 text-red-700', bar: 'bg-red-500' },
-  today: { label: 'Due today', chip: 'bg-amber-100 text-amber-700', bar: 'bg-amber-500' },
-  week: { label: 'This week', chip: 'bg-sky-100 text-sky-700', bar: 'bg-sky-500' },
-  later: { label: 'Later', chip: 'bg-slate-100 text-slate-600', bar: 'bg-slate-400' },
-  none: { label: 'No date', chip: 'bg-slate-100 text-slate-500', bar: 'bg-slate-300' },
+const CALENDAR_BANNER: Record<string, string> = {
+  connected: 'Calendar connected.',
+  denied: 'Calendar access was cancelled. Today stays empty until you connect.',
+  missing: 'Google did not grant calendar access. Connect again and allow read-only calendar.',
+  token: 'Google did not return a usable calendar connection. Try Connect calendar again.',
+  state: 'That connect attempt expired. Tap Connect calendar to start again.',
+  config: 'Google is not set up on the server yet.',
+  save: 'Calendar was approved, but it could not be saved. Run supabase/migration-v21-action-items.sql in Supabase.',
 };
-
-const KIND_META: Record<string, { label: string; chip: string }> = {
-  todo: { label: 'To-do', chip: 'bg-slate-100 text-slate-600' },
-  decision: { label: 'Decision', chip: 'bg-amber-100 text-amber-800' },
-  commitment: { label: 'Commitment', chip: 'bg-sky-100 text-sky-800' },
-  person: { label: 'People', chip: 'bg-violet-100 text-violet-800' },
-};
-
-const OWNER_CHIP: Record<string, string> = {
-  Personal: 'bg-emerald-100 text-emerald-700',
-  Protocase: 'bg-blue-100 text-blue-700',
-  MMP: 'bg-violet-100 text-violet-700',
-  Frameworks: 'bg-amber-100 text-amber-700',
-};
-
-function fmtDate(d: string | null) {
-  if (!d) return '';
-  const [y, m, day] = d.split('-').map(Number);
-  return new Date(y, m - 1, day).toLocaleDateString('en-CA', {
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
-/* --------------------------------- component ------------------------------- */
 
 export default function BrainPage() {
   const supabase = useMemo(() => createClient(), []);
-  const { user } = useAuth();
-  const { householdId } = useHousehold();
-
-  const [briefing, setBriefing] = useState<Briefing | null>(null);
-  const [items, setItems] = useState<Item[]>([]);
-  const [closed7d, setClosed7d] = useState<string[]>([]);
+  const { user, loading: authLoading } = useAuth();
+  const [items, setItems] = useState<ActionItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [filter, setFilter] = useState<'all' | 'overdue' | 'today' | 'waiting' | 'done'>('all');
-
-  const load = useCallback(async () => {
-    const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
-    const [b, it, cl] = await Promise.all([
-      supabase
-        .from('brain_briefings')
-        .select('headline, summary_md, briefing_date')
-        .eq('kind', 'daily')
-        .order('briefing_date', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from('brain_items')
-        .select('*')
-        .eq('active', true)
-        .order('sort_order', { ascending: true }),
-      supabase
-        .from('brain_items')
-        .select('done_at')
-        .gte('done_at', since)
-        .not('done_at', 'is', null),
-    ]);
-    setBriefing((b.data as Briefing) ?? null);
-    setItems((it.data as Item[]) ?? []);
-    setClosed7d(((cl.data as { done_at: string }[]) ?? []).map((c) => c.done_at));
-    setLoading(false);
-  }, [supabase]);
+  const [setup, setSetup] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [closed, setClosed] = useState<Record<string, boolean>>({});
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, DraftState>>({});
+  const [calendar, setCalendar] = useState<CalendarState>({ status: 'loading' });
+  const banner = useSyncExternalStore(subscribeNoop, readCalendarBanner, () => '');
 
   useEffect(() => {
-    if (user) load();
-  }, [user, load]);
-
-  const update = useCallback(
-    (id: string, fields: Partial<Item>) => {
-      setItems((arr) => arr.map((it) => (it.id === id ? { ...it, ...fields } : it)));
-      setSaveState('saving');
-      supabase
-        .from('brain_items')
-        .update(fields)
-        .eq('id', id)
-        .then(({ error }: { error: unknown }) => {
-          if (error) {
-            setSaveState('error');
-            load();
+    if (!user) return;
+    let cancelled = false;
+    supabase
+      .from('action_items')
+      .select('id, business, source_inbox, title, summary, created_at')
+      .eq('status', 'open')
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          if (/action_items|schema cache|does not exist/i.test(error.message)) {
+            setSetup('Action items are not in the database yet. Run supabase/migration-v21-action-items.sql in the Supabase SQL editor.');
           } else {
-            setSaveState('saved');
-            setTimeout(() => setSaveState('idle'), 1500);
+            setLoadError('Could not load action items.');
           }
-        });
-    },
-    [supabase, load]
-  );
-
-  const addTodo = useCallback(
-    async (f: { title: string; due_by?: string; out_to_who?: string }) => {
-      const row: Record<string, unknown> = {
-        item_key: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        kind: 'todo',
-        title: f.title,
-        owner: 'Mike',
-        due_by: f.due_by || null,
-        out_to: Boolean(f.out_to_who),
-        out_to_who: f.out_to_who || null,
-        source: 'manual',
-        sort_order: 999,
-        active: true,
-        briefing_date: todayISO(),
-      };
-      if (householdId) row.household_id = householdId;
-      if (user?.id) row.user_id = user.id;
-      let { error } = await supabase.from('brain_items').insert(row);
-      // v19 adds these columns. Until that migration is applied, retry the old shape.
-      if (error && /schema cache|could not find the ['"](?:household_id|user_id)['"] column/i.test(error.message)) {
-        delete row.household_id;
-        delete row.user_id;
-        ({ error } = await supabase.from('brain_items').insert(row));
-      }
-      if (error) setSaveState('error');
-      else load();
-    },
-    [supabase, load, householdId, user]
-  );
-
-  const byKind = useCallback(
-    (k: string) => items.filter((i) => i.kind === k),
-    [items]
-  );
-
-  const calendar = byKind('calendar');
-  const projects = byKind('project');
-  const insights = byKind('insight');
-  const context = byKind('context');
-
-  const actions = useMemo(() => {
-    const merged = items.filter((i) =>
-      ['todo', 'decision', 'commitment', 'person'].includes(i.kind)
-    );
-    const rank: Record<Urgency, number> = { overdue: 0, today: 1, week: 2, later: 3, none: 4 };
-    return [...merged].sort((a, b) => {
-      if (a.done !== b.done) return a.done ? 1 : -1;
-      const ua = rank[urgency(a.due_by, a.done)];
-      const ub = rank[urgency(b.due_by, b.done)];
-      if (ua !== ub) return ua - ub;
-      return (a.due_by ?? '9999').localeCompare(b.due_by ?? '9999');
-    });
-  }, [items]);
-
-  const people = useMemo(() => {
-    const set = new Set<string>();
-    for (const it of items) {
-      if (it.out_to_who) set.add(it.out_to_who);
-      for (const o of (it.owner ?? '').split(/[\/+,]/)) {
-        const t = o.trim();
-        if (t && t !== 'Mike' && t.length > 1) set.add(t);
-      }
-    }
-    return Array.from(set).sort();
-  }, [items]);
-
-  const scoreboard = useMemo(() => {
-    const actionable = [...actions, ...projects];
-    const open = actionable.filter((i) => !i.done && !i.out_to).length;
-    const waiting = actionable.filter((i) => !i.done && i.out_to).length;
-    const done = actionable.filter((i) => i.done).length;
-    const counts: Record<Urgency, number> = { overdue: 0, today: 0, week: 0, later: 0, none: 0 };
-    for (const i of actionable) if (!i.done) counts[urgency(i.due_by, i.done)]++;
-    const days: { label: string; n: number }[] = [];
-    for (let k = 6; k >= 0; k--) {
-      const d = new Date();
-      d.setDate(d.getDate() - k);
-      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-        d.getDate()
-      ).padStart(2, '0')}`;
-      days.push({
-        label: d.toLocaleDateString('en-CA', { weekday: 'narrow' }),
-        n: closed7d.filter((ts) => ts.slice(0, 10) === iso).length,
+          setItems([]);
+        } else {
+          setSetup('');
+          setLoadError('');
+          setItems((data ?? []) as ActionItem[]);
+        }
+        setLoading(false);
       });
-    }
-    return { open, waiting, done, counts, days };
-  }, [actions, projects, closed7d]);
+    fetch('/api/google-calendar/events')
+      .then((response) => response.json())
+      .then((body: { connected?: boolean; events?: CalendarEvent[]; reason?: string }) => {
+        if (cancelled) return;
+        setCalendar({
+          status: 'ready',
+          connected: Boolean(body.connected),
+          events: body.events ?? [],
+          reason: body.reason,
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCalendar({ status: 'ready', connected: false, events: [], reason: 'error' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, supabase]);
 
-  if (loading) return <div className="p-6 text-slate-500">Loading Brain…</div>;
+  const groups = useMemo(() => groupActionItems(items), [items]);
+  const todayLabel = new Date().toLocaleDateString('en-CA', {
+    timeZone: HALIFAX_TIME_ZONE,
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  function isOpen(id: string, count: number) {
+    if (id in closed) return !closed[id];
+    return count > 0;
+  }
+
+  function toggle(id: string, count: number) {
+    setClosed((current) => {
+      const open = id in current ? !current[id] : count > 0;
+      return { ...current, [id]: open };
+    });
+  }
+
+  async function markDone(id: string) {
+    if (pendingId) return;
+    setPendingId(id);
+    const doneAt = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('action_items')
+      .update({ status: 'done', done_at: doneAt })
+      .eq('id', id)
+      .select('id');
+    if (error || !data?.length) {
+      setDrafts((current) => ({
+        ...current,
+        [id]: { status: 'error', message: 'Could not mark that done.' },
+      }));
+      setPendingId(null);
+      return;
+    }
+    setItems((rows) => rows.filter((row) => row.id !== id));
+    setPendingId(null);
+  }
+
+  async function draftReply(id: string) {
+    setDrafts((current) => ({ ...current, [id]: { status: 'writing' } }));
+    try {
+      const response = await fetch('/api/brain/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const body = await response.json().catch(() => ({})) as { draft?: string; error?: string };
+      if (!response.ok || !body.draft) {
+        setDrafts((current) => ({
+          ...current,
+          [id]: { status: 'error', message: body.error || 'Could not draft a reply.' },
+        }));
+        return;
+      }
+      setDrafts((current) => ({ ...current, [id]: { status: 'ready', text: body.draft as string, copied: false } }));
+    } catch {
+      setDrafts((current) => ({
+        ...current,
+        [id]: { status: 'error', message: 'Could not draft a reply.' },
+      }));
+    }
+  }
+
+  async function copyDraft(id: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDrafts((current) => ({ ...current, [id]: { status: 'ready', text, copied: true } }));
+    } catch {
+      setDrafts((current) => ({
+        ...current,
+        [id]: { status: 'ready', text, copied: false, copyError: 'Could not copy. Select the reply and copy it yourself.' },
+      }));
+    }
+  }
+
+  if (authLoading || (user && loading)) {
+    return <p className="py-8 text-base text-zinc-400">Loading Brain…</p>;
+  }
 
   return (
-    <div className="max-w-5xl space-y-10 pb-24">
-      {/* header */}
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-xs uppercase tracking-widest text-slate-400">
-            {new Date().toLocaleDateString('en-CA', {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-              year: 'numeric',
-            })}
-          </div>
-          <h1 className="mt-1 text-2xl font-bold text-slate-900">
-            {briefing?.headline ?? 'Brain'}
-          </h1>
-          {briefing?.summary_md && (
-            <p className="mt-2 max-w-3xl whitespace-pre-wrap text-sm leading-relaxed text-slate-600">
-              {briefing.summary_md}
-            </p>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <SaveBadge state={saveState} />
-          <button
-            onClick={() => {
-              setLoading(true);
-              load();
-            }}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-          >
-            Refresh
-          </button>
-        </div>
+    <div className="mx-auto max-w-xl space-y-8 pb-8">
+      <header>
+        <p className="text-sm text-zinc-400">{todayLabel}</p>
+        <h1 className="mt-1 text-3xl font-bold tracking-tight text-white">Brain</h1>
       </header>
 
-      {/* scoreboard */}
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="flex items-center gap-5 rounded-xl border border-slate-200 bg-white p-5">
-          <Donut open={scoreboard.open} waiting={scoreboard.waiting} done={scoreboard.done} />
-          <div className="space-y-1.5 text-sm">
-            <LegendRow color="bg-slate-800" label="Open" n={scoreboard.open} />
-            <LegendRow color="bg-sky-500" label="Waiting on others" n={scoreboard.waiting} />
-            <LegendRow color="bg-emerald-500" label="Done" n={scoreboard.done} />
-          </div>
-        </div>
+      {banner && (
+        <p className="rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-200">{banner}</p>
+      )}
 
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Open items by urgency
-          </div>
-          <div className="space-y-2">
-            {(['overdue', 'today', 'week', 'none'] as Urgency[]).map((u) => {
-              const max = Math.max(
-                1,
-                ...(['overdue', 'today', 'week', 'none'] as Urgency[]).map(
-                  (x) => scoreboard.counts[x]
-                )
-              );
-              const n = scoreboard.counts[u];
-              return (
-                <div key={u} className="flex items-center gap-2 text-xs">
-                  <span className="w-16 shrink-0 text-slate-500">{URGENCY_META[u].label}</span>
-                  <div className="h-3 flex-1 overflow-hidden rounded bg-slate-100">
-                    <div
-                      className={`h-full rounded ${URGENCY_META[u].bar}`}
-                      style={{ width: `${(n / max) * 100}%` }}
-                    />
-                  </div>
-                  <span className="w-5 text-right font-semibold text-slate-700">{n}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+      <CalendarPanel state={calendar} />
 
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Closed — last 7 days
-          </div>
-          <div className="flex h-16 items-end gap-1.5">
-            {scoreboard.days.map((d, i) => {
-              const max = Math.max(1, ...scoreboard.days.map((x) => x.n));
-              return (
-                <div key={i} className="flex flex-1 flex-col items-center gap-1">
-                  <div
-                    className={`w-full rounded-t ${d.n ? 'bg-emerald-500' : 'bg-slate-100'}`}
-                    style={{ height: `${Math.max(6, (d.n / max) * 100)}%` }}
-                    title={`${d.n} closed`}
-                  />
-                  <span className="text-[10px] text-slate-400">{d.label}</span>
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-2 text-xs text-slate-500">
-            {closed7d.length === 0
-              ? 'Nothing closed this week — check something off.'
-              : `${closed7d.length} closed this week`}
-          </div>
-        </div>
-      </section>
-
-      {/* today */}
-      <Section title="Today" count={calendar.length}>
-        {calendar.length === 0 ? (
-          <Empty text="No calendar events synced for today." />
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-            {calendar.map((c, i) => {
-              const m = c.title.match(/^(\d{1,2}:\d{2}\s*[AP]M)\s*[-–—]\s*(.+)$/i);
-              const time = m?.[1] ?? '';
-              const label = m?.[2] ?? c.title;
-              return (
-                <div
-                  key={c.id}
-                  className={`flex items-center gap-4 px-4 py-3 ${
-                    i > 0 ? 'border-t border-slate-100' : ''
-                  } ${c.done ? 'opacity-50' : ''}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={c.done}
-                    onChange={(e) => update(c.id, { done: e.target.checked })}
-                    className="h-4 w-4 accent-emerald-600"
-                  />
-                  <span className="w-20 shrink-0 font-mono text-xs font-semibold text-slate-500">
-                    {time}
-                  </span>
-                  <span
-                    className={`flex-1 text-sm ${
-                      c.done ? 'text-slate-400 line-through' : 'text-slate-800'
-                    }`}
-                  >
-                    {label}
-                    {c.detail && <span className="ml-2 text-xs text-slate-400">{c.detail}</span>}
-                  </span>
-                  {c.owner && (
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                        OWNER_CHIP[c.owner] ?? 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {c.owner}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Section>
-
-      {/* open projects */}
-      <Section title="Open Projects" count={projects.length}>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {[...projects]
-            .sort((a, b) => {
-              const rank: Record<Urgency, number> = {
-                overdue: 0, today: 1, week: 2, later: 3, none: 4,
-              };
-              return (
-                rank[urgency(a.due_by, a.done)] - rank[urgency(b.due_by, b.done)] ||
-                (a.due_by ?? '9999').localeCompare(b.due_by ?? '9999')
-              );
-            })
-            .map((p) => {
-              const u = urgency(p.due_by, p.done);
-              return (
-                <div
-                  key={p.id}
-                  className="flex flex-col rounded-xl border border-slate-200 bg-white p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="font-semibold text-slate-900">{p.title}</div>
-                    <span
-                      className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${URGENCY_META[u].chip}`}
-                    >
-                      {u === 'none'
-                        ? 'Needs date'
-                        : u === 'later' || u === 'week'
-                        ? `Due ${fmtDate(p.due_by)}`
-                        : URGENCY_META[u].label}
-                    </span>
-                  </div>
-                  {p.detail && (
-                    <div className="mt-1 text-sm leading-snug text-slate-600">{p.detail}</div>
-                  )}
-                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
-                    {p.owner && (
-                      <span>
-                        <span className="text-slate-400">Owner</span>{' '}
-                        <span className="font-medium text-slate-700">{p.owner}</span>
-                      </span>
-                    )}
-                    <label className="flex items-center gap-1">
-                      <span className="text-slate-400">Start</span>
-                      <input
-                        type="date"
-                        value={p.start_date ?? ''}
-                        onChange={(e) => update(p.id, { start_date: e.target.value || null })}
-                        className="rounded border border-slate-200 px-1.5 py-0.5 text-slate-700"
-                      />
-                    </label>
-                    <label className="flex items-center gap-1">
-                      <span className="text-slate-400">Due</span>
-                      <input
-                        type="date"
-                        value={p.due_by ?? ''}
-                        onChange={(e) => update(p.id, { due_by: e.target.value || null })}
-                        className={`rounded border px-1.5 py-0.5 ${
-                          p.due_by
-                            ? 'border-slate-200 text-slate-700'
-                            : 'border-amber-300 text-amber-600'
-                        }`}
-                      />
-                    </label>
-                  </div>
-                  <NotesField
-                    value={p.notes ?? ''}
-                    placeholder="Notes — clarify issues, leave instructions; folded into the vault tonight…"
-                    onSave={(v) => update(p.id, { notes: v })}
-                  />
-                </div>
-              );
-            })}
-        </div>
-      </Section>
-
-      {/* to-do */}
-      <Section
-        title="To-Do"
-        count={actions.filter((a) => !a.done).length}
-        right={
-          <div className="flex gap-1">
-            {(
-              [
-                ['all', 'All'],
-                ['overdue', 'Overdue'],
-                ['today', 'Today'],
-                ['waiting', 'Waiting on'],
-                ['done', 'Done'],
-              ] as const
-            ).map(([key, label]) => (
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Open</h2>
+        {setup && <p className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{setup}</p>}
+        {loadError && <p className="text-sm text-red-300">{loadError}</p>}
+        {groups.map((group) => {
+          const open = isOpen(group.id, group.items.length);
+          return (
+            <div key={group.id} className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
               <button
-                key={key}
-                onClick={() => setFilter(key)}
-                className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                  filter === key
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
+                type="button"
+                aria-expanded={open}
+                onClick={() => toggle(group.id, group.items.length)}
+                className="flex min-h-14 w-full items-center gap-3 px-4 text-left"
               >
-                {label}
+                <span className="text-lg font-semibold text-white">{group.label}</span>
+                <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm font-medium text-zinc-200">
+                  {group.items.length}
+                </span>
+                <ChevronDown
+                  aria-hidden
+                  className={cn('ml-auto text-zinc-400 transition-transform', open && 'rotate-180')}
+                  size={22}
+                />
               </button>
-            ))}
-          </div>
-        }
-      >
-        <QuickAdd people={people} onAdd={addTodo} />
-        <div className="mt-3 space-y-2">
-          {actions
-            .filter((t) => {
-              if (filter === 'overdue') return urgency(t.due_by, t.done) === 'overdue';
-              if (filter === 'today') return urgency(t.due_by, t.done) === 'today';
-              if (filter === 'waiting') return t.out_to && !t.done;
-              if (filter === 'done') return t.done;
-              return true;
-            })
-            .map((t) => (
-              <ActionRow key={t.id} item={t} onUpdate={update} />
-            ))}
-        </div>
-      </Section>
-
-      {/* insights */}
-      <Section title="Key insights" count={insights.length}>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <ul className="list-disc space-y-1.5 pl-5 text-sm text-slate-700">
-            {insights.map((i) => (
-              <li key={i.id}>
-                {i.title}
-                {i.detail && <span className="text-slate-400"> — {i.detail}</span>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </Section>
-
-      {/* context questions */}
-      <Section title="Context questions" count={context.length}>
-        <p className="-mt-1 mb-3 text-xs text-slate-500">
-          Answer inline — answers are folded into the vault on the next pass.
-        </p>
-        <div className="space-y-2">
-          {context.map((q) => (
-            <div key={q.id} className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="text-sm font-medium text-slate-900">{q.title}</div>
-              {q.detail && <div className="mt-0.5 text-xs text-slate-500">{q.detail}</div>}
-              <NotesField
-                value={q.comment ?? ''}
-                placeholder="Answer…"
-                onSave={(v) => update(q.id, { comment: v })}
-              />
+              {open && (
+                group.items.length === 0 ? (
+                  <p className="border-t border-zinc-800 px-4 py-4 text-sm text-zinc-500">Nothing open.</p>
+                ) : (
+                  <ul>
+                    {group.items.map((item) => (
+                      <ActionCard
+                        key={item.id}
+                        item={item}
+                        pending={pendingId === item.id}
+                        draft={drafts[item.id]}
+                        onDone={() => markDone(item.id)}
+                        onDraft={() => draftReply(item.id)}
+                        onCopy={(text) => copyDraft(item.id, text)}
+                      />
+                    ))}
+                  </ul>
+                )
+              )}
             </div>
-          ))}
-        </div>
-      </Section>
+          );
+        })}
+      </section>
     </div>
   );
 }
 
-/* ------------------------------ sub-components ----------------------------- */
-
-function Section({
-  title, count, right, children,
-}: {
-  title: string;
-  count?: number;
-  right?: React.ReactNode;
-  children: React.ReactNode;
-}) {
+function CalendarPanel({ state }: { state: CalendarState }) {
+  const needsConnect = state.status === 'ready' && !state.connected;
   return (
     <section>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          {title}
-          {typeof count === 'number' && (
-            <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
-              {count}
-            </span>
-          )}
-        </h3>
-        {right}
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Today&apos;s calendar</h2>
+      <div className="mt-2 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+        {state.status === 'loading' && <p className="px-4 py-5 text-base text-zinc-400">Loading today…</p>}
+        {needsConnect && (
+          <div className="space-y-4 px-4 py-5">
+            <p className="text-base text-zinc-300">
+              {state.reason === 'error'
+                ? 'Could not load today’s calendar.'
+                : 'No events yet. Connect Google Calendar to see today in Halifax.'}
+            </p>
+            <a
+              href="/api/google-calendar/connect"
+              className="flex min-h-12 items-center justify-center rounded-xl bg-white px-4 text-base font-semibold text-zinc-900"
+            >
+              Connect calendar
+            </a>
+          </div>
+        )}
+        {state.status === 'ready' && state.connected && state.events.length === 0 && (
+          <p className="px-4 py-5 text-base text-zinc-400">Nothing on the calendar today.</p>
+        )}
+        {state.status === 'ready' && state.connected && state.events.length > 0 && (
+          <ul>
+            {state.events.map((event) => (
+              <li key={event.id} className="flex min-h-14 items-start gap-3 border-t border-zinc-800 px-4 py-3 first:border-t-0">
+                <span className="w-24 shrink-0 pt-0.5 text-sm font-medium text-zinc-300">{event.when}</span>
+                <span className="text-base text-white">{event.title}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      {children}
     </section>
   );
 }
 
-function Empty({ text }: { text: string }) {
-  return (
-    <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-      {text}
-    </div>
-  );
-}
-
-function SaveBadge({ state }: { state: 'idle' | 'saving' | 'saved' | 'error' }) {
-  if (state === 'idle') return null;
-  const map = {
-    saving: ['Saving…', 'text-slate-400'],
-    saved: ['Saved ✓', 'text-emerald-600'],
-    error: ['Save failed — reloaded', 'text-red-600'],
-  } as const;
-  const [label, cls] = map[state];
-  return <span className={`text-xs font-medium ${cls}`}>{label}</span>;
-}
-
-function LegendRow({ color, label, n }: { color: string; label: string; n: number }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className={`h-2.5 w-2.5 rounded-full ${color}`} />
-      <span className="text-slate-600">{label}</span>
-      <span className="ml-auto pl-3 font-semibold text-slate-900">{n}</span>
-    </div>
-  );
-}
-
-function Donut({ open, waiting, done }: { open: number; waiting: number; done: number }) {
-  const total = Math.max(1, open + waiting + done);
-  const R = 34;
-  const C = 2 * Math.PI * R;
-  const segs = [
-    { n: done, cls: 'stroke-emerald-500' },
-    { n: waiting, cls: 'stroke-sky-500' },
-    { n: open, cls: 'stroke-slate-800' },
-  ];
-  let offset = 0;
-  return (
-    <svg viewBox="0 0 90 90" className="h-24 w-24 shrink-0 -rotate-90">
-      <circle cx="45" cy="45" r={R} className="fill-none stroke-slate-100" strokeWidth="10" />
-      {segs.map((s, i) => {
-        const len = (s.n / total) * C;
-        const el = (
-          <circle
-            key={i}
-            cx="45"
-            cy="45"
-            r={R}
-            className={`fill-none ${s.cls}`}
-            strokeWidth="10"
-            strokeDasharray={`${len} ${C - len}`}
-            strokeDashoffset={-offset}
-          />
-        );
-        offset += len;
-        return el;
-      })}
-      <text
-        x="45"
-        y="45"
-        className="fill-slate-900 text-lg font-bold"
-        textAnchor="middle"
-        dominantBaseline="central"
-        transform="rotate(90 45 45)"
-      >
-        {open + waiting}
-      </text>
-    </svg>
-  );
-}
-
-function NotesField({
-  value, placeholder, onSave,
+function ActionCard({
+  item,
+  pending,
+  draft,
+  onDone,
+  onDraft,
+  onCopy,
 }: {
-  value: string;
-  placeholder?: string;
-  onSave: (v: string) => void;
+  item: ActionItem;
+  pending: boolean;
+  draft?: DraftState;
+  onDone: () => void;
+  onDraft: () => void;
+  onCopy: (text: string) => void;
 }) {
-  const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
   return (
-    <textarea
-      value={v}
-      placeholder={placeholder}
-      onChange={(e) => setV(e.target.value)}
-      onBlur={() => v !== value && onSave(v)}
-      rows={1}
-      className="mt-3 w-full resize-y rounded-md border border-slate-200 bg-slate-50/50 px-2.5 py-1.5 text-sm placeholder:text-slate-300 focus:border-slate-400 focus:bg-white focus:outline-none"
-    />
-  );
-}
-
-function QuickAdd({
-  people, onAdd,
-}: {
-  people: string[];
-  onAdd: (f: { title: string; due_by?: string; out_to_who?: string }) => Promise<void>;
-}) {
-  const [title, setTitle] = useState('');
-  const [due, setDue] = useState('');
-  const [who, setWho] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const submit = async () => {
-    if (!title.trim() || busy) return;
-    setBusy(true);
-    try {
-      await onAdd({ title: title.trim(), due_by: due || undefined, out_to_who: who || undefined });
-      setTitle('');
-      setDue('');
-      setWho('');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/50 p-3">
-      <input
-        type="text"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && submit()}
-        placeholder="Add a to-do… (Enter to save)"
-        className="min-w-[200px] flex-1 rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-slate-400 focus:outline-none"
-      />
-      <input
-        type="date"
-        value={due}
-        onChange={(e) => setDue(e.target.value)}
-        className="rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-600"
-      />
-      <input
-        type="text"
-        list="brain-people"
-        value={who}
-        onChange={(e) => setWho(e.target.value)}
-        placeholder="Assign to…"
-        className="w-32 rounded-md border border-slate-200 px-2 py-1.5 text-xs"
-      />
-      <button
-        onClick={submit}
-        disabled={!title.trim() || busy}
-        className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-      >
-        Add
-      </button>
-      <datalist id="brain-people">
-        {people.map((p) => (
-          <option key={p} value={p} />
-        ))}
-      </datalist>
-    </div>
-  );
-}
-
-function ActionRow({
-  item, onUpdate,
-}: {
-  item: Item;
-  onUpdate: (id: string, f: Partial<Item>) => void;
-}) {
-  const u = urgency(item.due_by, item.done);
-  const kind = KIND_META[item.kind] ?? KIND_META.todo;
-  return (
-    <div
-      className={`rounded-xl border bg-white p-3.5 ${
-        u === 'overdue' && !item.done ? 'border-red-200' : 'border-slate-200'
-      } ${item.done ? 'opacity-60' : ''}`}
-    >
-      <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          checked={item.done}
-          onChange={(e) => onUpdate(item.id, { done: e.target.checked })}
-          className="mt-0.5 h-4 w-4 accent-emerald-600"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`text-sm ${
-                item.done ? 'text-slate-400 line-through' : 'font-medium text-slate-900'
-              }`}
-            >
-              {item.title}
-            </span>
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${kind.chip}`}>
-              {kind.label}
-            </span>
-            {u !== 'none' && u !== 'later' && !item.done && (
-              <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${URGENCY_META[u].chip}`}
-              >
-                {URGENCY_META[u].label}
-              </span>
-            )}
-            {item.out_to && item.out_to_who && (
-              <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
-                → {item.out_to_who}
-              </span>
-            )}
-          </div>
-          {item.detail && (
-            <div className="mt-0.5 text-xs leading-snug text-slate-500">{item.detail}</div>
-          )}
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-500">
-            {item.project && <span className="text-slate-400">{item.project}</span>}
-            {item.owner && item.owner !== 'Mike' && (
-              <span className="text-slate-400">Owner: {item.owner}</span>
-            )}
-            <label className="flex items-center gap-1">
-              Due
-              <input
-                type="date"
-                value={item.due_by ?? ''}
-                onChange={(e) => onUpdate(item.id, { due_by: e.target.value || null })}
-                className="rounded border border-slate-200 px-1 py-0.5"
-              />
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={item.out_to}
-                onChange={(e) =>
-                  onUpdate(item.id, {
-                    out_to: e.target.checked,
-                    ...(e.target.checked ? {} : { out_to_who: null }),
-                  })
-                }
-              />
-              Out to
-            </label>
-            {item.out_to && (
-              <input
-                type="text"
-                list="brain-people"
-                placeholder="who?"
-                defaultValue={item.out_to_who ?? ''}
-                onBlur={(e) => onUpdate(item.id, { out_to_who: e.target.value || null })}
-                className="w-32 rounded border border-slate-200 px-2 py-0.5"
-              />
-            )}
-          </div>
-          <NotesField
-            value={item.comment ?? ''}
-            placeholder="Comment — read as an instruction by the nightly pass…"
-            onSave={(v) => onUpdate(item.id, { comment: v })}
-          />
-        </div>
+    <li className="border-t border-zinc-800 px-4 py-4">
+      <h3 className="text-base font-semibold leading-snug text-white">{item.title}</h3>
+      {item.summary && <p className="mt-1 line-clamp-3 text-sm leading-relaxed text-zinc-400">{item.summary}</p>}
+      <p className="mt-2 text-sm text-zinc-500">
+        {item.source_inbox}
+        <span aria-hidden> · </span>
+        <span>{actionAge(item.created_at)}</span>
+      </p>
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={onDone}
+          disabled={pending}
+          className="min-h-12 rounded-xl bg-emerald-600 px-4 text-base font-semibold text-white disabled:opacity-60"
+        >
+          {pending ? 'Saving…' : 'Mark done'}
+        </button>
+        <button
+          type="button"
+          onClick={onDraft}
+          disabled={draft?.status === 'writing'}
+          className="min-h-12 rounded-xl border border-zinc-700 bg-zinc-800 px-4 text-base font-semibold text-white disabled:opacity-60"
+        >
+          {draft?.status === 'writing' ? 'Writing…' : 'Draft a reply'}
+        </button>
       </div>
-    </div>
+      {draft?.status === 'ready' && (
+        <div className="mt-3 space-y-2">
+          <p className="text-sm text-zinc-400">Suggested reply. Nothing is sent.</p>
+          <textarea
+            readOnly
+            value={draft.text}
+            rows={6}
+            className="w-full resize-y rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-3 text-base text-zinc-100"
+          />
+          <button
+            type="button"
+            onClick={() => onCopy(draft.text)}
+            className="min-h-12 w-full rounded-xl border border-zinc-700 px-4 text-base font-semibold text-white sm:w-auto"
+          >
+            {draft.copied ? 'Copied' : 'Copy'}
+          </button>
+          {draft.copyError && <p className="text-sm text-red-300">{draft.copyError}</p>}
+        </div>
+      )}
+      {draft?.status === 'error' && <p className="mt-3 text-sm text-red-300">{draft.message}</p>}
+    </li>
   );
 }
