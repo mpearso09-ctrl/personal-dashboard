@@ -10,6 +10,11 @@ test('the production gateway billing error is treated as a model outage', () => 
   assert.equal(isFoodModelUnavailable('relation "nutrition_items" does not exist'), false);
 });
 
+test('a free-tier model refusal is a model outage', () => {
+  const message = 'Free tier users do not have access to this model. Access is restricted until you top-up your credit.';
+  assert.equal(isFoodModelUnavailable(message), true);
+});
+
 test('a spoken meal becomes macro rows the food log can insert', () => {
   const fallback = fallbackFoodLog('2 eggs and toast with butter');
   assert.ok(fallback);

@@ -16,6 +16,7 @@ import {
   segmentSpokenMeal,
 } from './nutrition-meal';
 import {
+  isFoodModelUnavailable,
   normalizeFoodOperation,
   planNutritionChanges,
   type FoodOperation,
@@ -60,8 +61,8 @@ export function nutritionModel(): string {
 
 export function nutritionAiError(err: unknown): string {
   const message = err instanceof Error ? err.message : '';
-  if (/credit card|billing|insufficient|quota/i.test(message)) {
-    return 'The food model is unavailable right now, so that meal was not saved. Type the foods, or try the mic again in a little while.';
+  if (/credit card|billing|insufficient|quota|free tier|restricted|top-up|credit/i.test(message)) {
+    return 'The food model is unavailable right now, so nothing was added to the log. Your words are kept for a retry.';
   }
   if (/AI_GATEWAY_API_KEY|OIDC|authentication|unauthorized|api key/i.test(message)) {
     return 'The food parser needs the Vercel AI Gateway. On Vercel that is automatic. Locally, set AI_GATEWAY_API_KEY.';
@@ -115,7 +116,7 @@ export async function logFoodTurn(
     if (saveError) throw new Error(saveError.message);
     return { reply, pending: false };
   } catch (err) {
-    if (!isFoodParsePending(err)) throw err;
+    if (!isFoodParsePending(err) && !isFoodModelUnavailable(err instanceof Error ? err.message : String(err))) throw err;
     await savePendingTranscript(supabase, userId, date, text);
     return pendingFoodResult();
   }
@@ -148,7 +149,7 @@ export async function rerunFoodMessage(
     await replacePendingNote(supabase, userId, date, messageId, reply);
     return { reply, pending: false };
   } catch (err) {
-    if (!isFoodParsePending(err)) throw err;
+    if (!isFoodParsePending(err) && !isFoodModelUnavailable(err instanceof Error ? err.message : String(err))) throw err;
     return pendingFoodResult();
   }
 }

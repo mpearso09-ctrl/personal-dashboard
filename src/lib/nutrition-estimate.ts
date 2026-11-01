@@ -110,7 +110,7 @@ const ALIASES = FOODS.flatMap((entry) => entry.aliases.map((alias) => ({ alias, 
   .sort((a, b) => b.alias.length - a.alias.length);
 
 export function isFoodModelUnavailable(message: string): boolean {
-  return /credit card|billing|insufficient|quota|AI Gateway|AI_GATEWAY|No object generated|could not turn that into food|food parser returned nothing|did not respond|unauthorized|api key|OIDC/i.test(message);
+  return /credit card|billing|insufficient|quota|free tier|restricted|top-up|credit|AI Gateway|AI_GATEWAY|No object generated|could not turn that into food|food parser returned nothing|did not respond|unauthorized|api key|OIDC/i.test(message);
 }
 
 export function normalizeFoodOperation(raw: Partial<FoodOperation> & { op: FoodOp }): FoodOperation {
