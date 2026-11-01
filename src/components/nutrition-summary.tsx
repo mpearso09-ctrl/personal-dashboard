@@ -14,13 +14,15 @@ import {
   type NutritionSettings,
   type NutritionTotal,
 } from '@/lib/nutrition';
-import { cn } from '@/lib/utils';
+import { cn, latestTimestamp } from '@/lib/utils';
+import { UpdatedAgo } from '@/components/updated-ago';
 
 export function NutritionSummary({ userId, date, compact = false }: { userId: string; date: string; compact?: boolean }) {
   const supabase = createClient();
   const [items, setItems] = useState<NutritionItem[] | null>(null);
   const [settings, setSettings] = useState<NutritionSettings | null>(null);
   const [error, setError] = useState('');
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   useEffect(() => {
     let cancel = false;
@@ -34,11 +36,18 @@ export function NutritionSummary({ userId, date, compact = false }: { userId: st
       if (loadError) {
         setError(loadError);
         setItems([]);
+        setUpdatedAt(null);
         setSettings(normalizeSettings(null));
         return;
       }
       setError('');
-      setItems(((itemRes.data ?? []) as Record<string, unknown>[]).map(normalizeItem));
+      const rows = (itemRes.data ?? []) as Record<string, unknown>[];
+      setItems(rows.map(normalizeItem));
+      setUpdatedAt(latestTimestamp(rows.map((row) => {
+        const updated = typeof row.updated_at === 'string' ? row.updated_at : null;
+        const created = typeof row.created_at === 'string' ? row.created_at : null;
+        return updated ?? created;
+      })));
       setSettings(normalizeSettings(settingRes.data));
     }
     load();
@@ -50,7 +59,10 @@ export function NutritionSummary({ userId, date, compact = false }: { userId: st
   return (
     <div className={cn('bg-zinc-900 border border-zinc-800 rounded-xl', compact ? 'p-4' : 'p-5')}>
       <div className="flex items-center justify-between gap-3 mb-3">
-        <h2 className="text-sm font-semibold text-white">Today&apos;s food</h2>
+        <div>
+          <h2 className="text-sm font-semibold text-white">Today&apos;s food</h2>
+          <UpdatedAgo at={updatedAt} />
+        </div>
         <Link href="/nutrition" className="text-sm text-blue-400 hover:text-blue-300">Log food</Link>
       </div>
       {items == null ? (

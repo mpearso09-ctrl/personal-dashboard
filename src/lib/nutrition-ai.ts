@@ -2,47 +2,39 @@ import { generateText, NoObjectGeneratedError, NoTranscriptGeneratedError, Outpu
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import {
-  NUTRITION_MACROS,
   type NutritionItem,
-  type NutritionMacroKey,
-  isMacroKey,
   normalizeItem,
   syncFitnessNutritionFromFood,
 } from './nutrition';
+import {
+  fallbackFoodLog,
+  isFoodModelUnavailable,
+  normalizeFoodOperation,
+  planNutritionChanges,
+  type FoodOperation,
+} from './nutrition-estimate';
 
 /** Cheap, fast model from the live AI Gateway catalog. Override with AI_GATEWAY_MODEL. */
 export const DEFAULT_NUTRITION_MODEL = 'google/gemini-3.5-flash-lite';
 
 const operationSchema = z.object({
   op: z.enum(['add', 'update', 'delete']),
-  id: z.string().nullable(),
-  name: z.string().nullable(),
-  quantity: z.string().nullable(),
-  calories: z.number().nullable(),
-  protein_g: z.number().nullable(),
-  fat_g: z.number().nullable(),
-  carbs_g: z.number().nullable(),
-  fiber_g: z.number().nullable(),
-  sugar_g: z.number().nullable(),
-  sodium_mg: z.number().nullable(),
+  id: z.string().nullish(),
+  name: z.string().nullish(),
+  quantity: z.string().nullish(),
+  calories: z.number().nullish(),
+  protein_g: z.number().nullish(),
+  fat_g: z.number().nullish(),
+  carbs_g: z.number().nullish(),
+  fiber_g: z.number().nullish(),
+  sugar_g: z.number().nullish(),
+  sodium_mg: z.number().nullish(),
 });
 
 const logSchema = z.object({
   reply: z.string(),
   operations: z.array(operationSchema).max(20),
 });
-
-type Operation = z.infer<typeof operationSchema>;
-
-const LIMITS: Record<NutritionMacroKey, { max: number; digits: number }> = {
-  calories: { max: 8000, digits: 0 },
-  protein_g: { max: 500, digits: 1 },
-  fat_g: { max: 500, digits: 1 },
-  carbs_g: { max: 800, digits: 1 },
-  fiber_g: { max: 150, digits: 1 },
-  sugar_g: { max: 500, digits: 1 },
-  sodium_mg: { max: 20000, digits: 0 },
-};
 
 /** Cheap Gateway transcription model. Override with AI_GATEWAY_TRANSCRIBE_MODEL. */
 export const DEFAULT_TRANSCRIBE_MODEL = 'openai/gpt-4o-mini-transcribe';
@@ -61,7 +53,10 @@ export function nutritionModel(): string {
 
 export function nutritionAiError(err: unknown): string {
   const message = err instanceof Error ? err.message : '';
-  if (/AI_GATEWAY_API_KEY|OIDC|authentication|unauthorized|api key|gateway/i.test(message)) {
+  if (/credit card|billing|insufficient|quota/i.test(message)) {
+    return 'The food model is unavailable right now, so that meal was not saved. Type the foods, or try the mic again in a little while.';
+  }
+  if (/AI_GATEWAY_API_KEY|OIDC|authentication|unauthorized|api key/i.test(message)) {
     return 'The food parser needs the Vercel AI Gateway. On Vercel that is automatic. Locally, set AI_GATEWAY_API_KEY.';
   }
   if (NoObjectGeneratedError.isInstance(err)) {
@@ -104,17 +99,7 @@ export async function logFoodTurn(
 
   const items = ((itemRows ?? []) as Record<string, unknown>[]).map(normalizeItem);
   const history = (messageRows ?? []) as { role: string; content: string }[];
-  const parsed = await generateText({
-    model: nutritionModel() as typeof DEFAULT_NUTRITION_MODEL,
-    output: Output.object({ schema: logSchema }),
-    system: `You update one person's food log for a single day. Estimate calories (kcal), protein, fat, carbs, fiber, and sugar in grams, and sodium in milligrams, for the whole portion they describe. Use ordinary home or restaurant portions when they are vague. Numbers are estimates, not a lab analysis.
-Change only what the new message asks for. Add foods that are not already listed. Update an existing id when they correct a portion ("actually make that 3 eggs") and re-estimate that line for the new amount. Delete an item only when they say they did not eat it. Never delete or rewrite foods they did not mention. If you are unsure which item they mean, ask in reply and return no operations.
-quantity is a short portion phrase such as "2 large eggs". name is the food, not the whole sentence. reply is one or two plain sentences confirming the change. Do not use markdown.`,
-    prompt: `Current items:\n${JSON.stringify(items.map(briefItem))}\n\nRecent conversation:\n${history.map((entry) => `${entry.role}: ${entry.content}`).join('\n') || '(none)'}\n\nNew message:\n${message}`,
-  });
-
-  const output = parsed.output;
-  if (!output) throw new Error('The food parser returned nothing.');
+  const output = await parseFoodMessage(message, items, history);
   await applyOperations(supabase, userId, date, items, output.operations);
   await syncFitnessNutritionFromFood(supabase, userId, date);
   const reply = output.reply.trim().slice(0, 600) || 'Updated the food log. These numbers are estimates.';
@@ -124,6 +109,35 @@ quantity is a short portion phrase such as "2 large eggs". name is the food, not
   ]);
   if (saveError) throw new Error(saveError.message);
   return { reply };
+}
+
+async function parseFoodMessage(
+  message: string,
+  items: NutritionItem[],
+  history: { role: string; content: string }[],
+): Promise<{ reply: string; operations: FoodOperation[] }> {
+  try {
+    const parsed = await generateText({
+      model: nutritionModel() as typeof DEFAULT_NUTRITION_MODEL,
+      output: Output.object({ schema: logSchema }),
+      system: `You update one person's food log for a single day. Estimate calories (kcal), protein, fat, carbs, fiber, and sugar in grams, and sodium in milligrams, for the whole portion they describe. Use ordinary home or restaurant portions when they are vague. Numbers are estimates, not a lab analysis.
+Change only what the new message asks for. Add foods that are not already listed. Update an existing id when they correct a portion ("actually make that 3 eggs") and re-estimate that line for the new amount. Delete an item only when they say they did not eat it. Never delete or rewrite foods they did not mention. If you are unsure which item they mean, ask in reply and return no operations.
+quantity is a short portion phrase such as "2 large eggs". name is the food, not the whole sentence. reply is one or two plain sentences confirming the change. Do not use markdown.`,
+      prompt: `Current items:\n${JSON.stringify(items.map(briefItem))}\n\nRecent conversation:\n${history.map((entry) => `${entry.role}: ${entry.content}`).join('\n') || '(none)'}\n\nNew message:\n${message}`,
+    });
+    const output = parsed.output;
+    if (!output) throw new Error('The food parser returned nothing.');
+    return {
+      reply: output.reply,
+      operations: output.operations.map((operation) => normalizeFoodOperation(operation)),
+    };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    if (!NoObjectGeneratedError.isInstance(err) && !isFoodModelUnavailable(detail)) throw err;
+    const fallback = fallbackFoodLog(message);
+    if (!fallback) throw err;
+    return fallback;
+  }
 }
 
 function briefItem(item: NutritionItem) {
@@ -146,31 +160,24 @@ async function applyOperations(
   userId: string,
   date: string,
   existing: NutritionItem[],
-  operations: Operation[],
+  operations: FoodOperation[],
 ) {
-  const ids = new Set(existing.map((item) => item.id));
-  for (const operation of operations) {
-    if (operation.op === 'delete') {
-      if (!operation.id || !ids.has(operation.id)) continue;
-      const { error } = await supabase.from('nutrition_items').delete().eq('id', operation.id).eq('user_id', userId);
-      if (error) throw new Error(error.message);
-      ids.delete(operation.id);
-      continue;
-    }
-    const patch = itemPatch(operation);
-    if (operation.op === 'update') {
-      const current = existing.find((item) => item.id === operation.id);
-      if (!current || !operation.id || !ids.has(operation.id)) continue;
-      const { error } = await supabase
-        .from('nutrition_items')
-        .update({ ...patch, name: patch.name || current.name, updated_at: new Date().toISOString() })
-        .eq('id', operation.id)
-        .eq('user_id', userId)
-        .eq('date', date);
-      if (error) throw new Error(error.message);
-      continue;
-    }
-    if (!patch.name) continue;
+  const plan = planNutritionChanges(existing, operations);
+  for (const id of plan.deletes) {
+    const { error } = await supabase.from('nutrition_items').delete().eq('id', id).eq('user_id', userId);
+    if (error) throw new Error(error.message);
+  }
+  const updatedAt = new Date().toISOString();
+  for (const update of plan.updates) {
+    const { error } = await supabase
+      .from('nutrition_items')
+      .update({ ...update.patch, updated_at: updatedAt })
+      .eq('id', update.id)
+      .eq('user_id', userId)
+      .eq('date', date);
+    if (error) throw new Error(error.message);
+  }
+  for (const patch of plan.inserts) {
     const { error } = await supabase.from('nutrition_items').insert({
       user_id: userId,
       date,
@@ -178,23 +185,4 @@ async function applyOperations(
     });
     if (error) throw new Error(error.message);
   }
-}
-
-function itemPatch(operation: Operation) {
-  const name = operation.name?.trim().slice(0, 120) || '';
-  const quantity = operation.quantity?.trim().slice(0, 80) || null;
-  const numbers = {} as Record<NutritionMacroKey, number | null>;
-  for (const macro of NUTRITION_MACROS) {
-    if (!isMacroKey(macro.key)) continue;
-    numbers[macro.key] = clampMacro(macro.key, operation[macro.key]);
-  }
-  return { name, quantity, ...numbers };
-}
-
-function clampMacro(key: NutritionMacroKey, value: number | null): number | null {
-  if (value == null || !Number.isFinite(value) || value < 0) return null;
-  const limit = LIMITS[key];
-  const capped = Math.min(value, limit.max);
-  const factor = 10 ** limit.digits;
-  return Math.round(capped * factor) / factor;
 }

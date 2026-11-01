@@ -9,7 +9,6 @@ import {
   TrendingUp,
   Receipt,
   Landmark,
-  PieChart as PieIcon,
   Loader2,
   LayoutDashboard,
   Wallet,
@@ -21,9 +20,8 @@ import { BudgetTab } from './budget-tab';
 import { CashFlowTab } from './cash-flow-tab';
 import { ReimbursementsTab } from './reimbursements-tab';
 import { NetWorthTab } from './net-worth-tab';
-import { InvestmentsTab } from './investments-tab';
 
-const TABS = ['Overview', 'Income', 'Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Investments', 'Reports'] as const;
+const TABS = ['Overview', 'Income', 'Budget', 'Cash Flow', 'Reimbursements', 'Net Worth', 'Reports'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_ICONS: Record<Tab, React.ReactNode> = {
@@ -33,7 +31,6 @@ const TAB_ICONS: Record<Tab, React.ReactNode> = {
   'Cash Flow': <TrendingUp className="w-4 h-4" />,
   Reimbursements: <Receipt className="w-4 h-4" />,
   'Net Worth': <Landmark className="w-4 h-4" />,
-  Investments: <PieIcon className="w-4 h-4" />,
   Reports: <Receipt className="w-4 h-4" />,
 };
 
@@ -106,9 +103,6 @@ export default function FinancesPage() {
       )}
       {activeTab === 'Net Worth' && (
         <NetWorthTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
-      )}
-      {activeTab === 'Investments' && (
-        <InvestmentsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
       )}
       {activeTab === 'Reports' && (
         <ReportsTab userId={user.id} householdId={householdId} canEdit={canEditFinances} />
