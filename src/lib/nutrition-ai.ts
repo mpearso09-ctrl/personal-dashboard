@@ -27,21 +27,21 @@ export const DEFAULT_NUTRITION_MODEL = 'google/gemini-3.5-flash-lite';
 
 const operationSchema = z.object({
   op: z.enum(['add', 'update', 'delete']),
-  id: z.string().nullish(),
-  name: z.string().nullish(),
-  quantity: z.string().nullish(),
-  calories: z.number().nullish(),
-  protein_g: z.number().nullish(),
-  fat_g: z.number().nullish(),
-  carbs_g: z.number().nullish(),
-  fiber_g: z.number().nullish(),
-  sugar_g: z.number().nullish(),
-  sodium_mg: z.number().nullish(),
+  id: z.string().nullable(),
+  name: z.string().nullable(),
+  quantity: z.string().nullable(),
+  calories: z.number().nullable(),
+  protein_g: z.number().nullable(),
+  fat_g: z.number().nullable(),
+  carbs_g: z.number().nullable(),
+  fiber_g: z.number().nullable(),
+  sugar_g: z.number().nullable(),
+  sodium_mg: z.number().nullable(),
 });
 
 const logSchema = z.object({
   reply: z.string(),
-  operations: z.array(operationSchema).max(40),
+  operations: z.array(operationSchema),
 });
 
 /** Cheap Gateway transcription model. Override with AI_GATEWAY_TRANSCRIBE_MODEL. */
@@ -61,7 +61,7 @@ export function nutritionModel(): string {
 
 export function nutritionAiError(err: unknown): string {
   const message = err instanceof Error ? err.message : '';
-  if (/credit card|billing|insufficient|quota|free tier|restricted|top-up|credit/i.test(message)) {
+  if (/credit card|billing|insufficient|quota|free tier|restricted|top-up|credit|invalid schema|invalid argument/i.test(message)) {
     return 'The food model is unavailable right now, so nothing was added to the log. Your words are kept for a retry.';
   }
   if (/AI_GATEWAY_API_KEY|OIDC|authentication|unauthorized|api key/i.test(message)) {
@@ -171,7 +171,7 @@ async function parseFoodMessage(
     return {
       reply: output.reply,
       operations: mergeSpokenFoods(
-        output.operations.map((operation) => normalizeFoodOperation(operation)),
+        output.operations.slice(0, 20).map((operation) => normalizeFoodOperation(operation)),
         segmentSpokenMeal(message),
         message,
         items.map((item) => item.name),

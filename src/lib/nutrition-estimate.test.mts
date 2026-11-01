@@ -15,6 +15,12 @@ test('a free-tier model refusal is a model outage', () => {
   assert.equal(isFoodModelUnavailable(message), true);
 });
 
+test('an OpenAI strict-schema refusal is a model outage', () => {
+  const message = "Invalid schema for response_format 'response': In context=('properties','operations','items'), 'required' is required to be supplied and to be an array including every key in properties. Missing 'id'.";
+  assert.equal(isFoodModelUnavailable(message), true);
+  assert.equal(isFoodModelUnavailable('Invalid argument: the tool schema was rejected.'), true);
+});
+
 test('a spoken meal becomes macro rows the food log can insert', () => {
   const fallback = fallbackFoodLog('2 eggs and toast with butter');
   assert.ok(fallback);

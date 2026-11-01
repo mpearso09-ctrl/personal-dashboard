@@ -121,7 +121,8 @@ ${BREAKFAST_MEAL_TEXT}
 Separate items for that message:
 ${example}
 
-quantity is a short portion phrase such as "1 cup" or "3". name is the food, not the whole sentence. reply is one or two plain sentences confirming the change. Do not use markdown.`;
+quantity is a short portion phrase such as "1 cup" or "3". name is the food, not the whole sentence. reply is one or two plain sentences confirming the change. Do not use markdown.
+For add operations set id to null. Use null for any field that does not apply.`;
 }
 
 export function foodUserPrompt(
