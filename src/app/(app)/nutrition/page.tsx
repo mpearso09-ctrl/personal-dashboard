@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Mic, Send, Square, Trash2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
+import { audioFileName, preferredRecorderMime, recorderTimesliceMs } from '@/lib/meal-audio';
 import {
   dayTotals,
   formatMacro,
@@ -18,44 +19,16 @@ import {
   type NutritionMacroKey,
   type NutritionSettings,
 } from '@/lib/nutrition';
-import { commitTranscript, readSpeechResults } from '@/lib/speech-transcript';
+import { PENDING_FOOD_MESSAGE } from '@/lib/nutrition-meal';
 import { cn, getToday } from '@/lib/utils';
 
-type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string };
+type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; status: 'logged' | 'pending' };
 
-type SpeechResultEvent = { results: ArrayLike<{ isFinal: boolean; 0?: { transcript?: string } }> };
-type SpeechRec = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  onresult: ((event: SpeechResultEvent) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
+type ActiveRecording = {
+  recorder: MediaRecorder;
+  stream: MediaStream;
+  stopped: Promise<Blob>;
 };
-
-function speechRecognition(): SpeechRec | null {
-  if (typeof window === 'undefined') return null;
-  const host = window as Window & {
-    SpeechRecognition?: new () => SpeechRec;
-    webkitSpeechRecognition?: new () => SpeechRec;
-  };
-  const Ctor = host.SpeechRecognition || host.webkitSpeechRecognition;
-  if (!Ctor) return null;
-  const rec = new Ctor();
-  rec.lang = 'en-CA';
-  // iOS cuts continuous mode off after a short phrase. Restart on onend instead.
-  rec.continuous = false;
-  rec.interimResults = true;
-  return rec;
-}
-
-function recorderMime(): string {
-  if (typeof MediaRecorder === 'undefined') return '';
-  const types = ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm'];
-  return types.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
-}
 
 export default function NutritionPage() {
   const { user, loading } = useAuth();
@@ -69,21 +42,17 @@ export default function NutritionPage() {
   const [settings, setSettings] = useState<NutritionSettings>(normalizeSettings(null));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
-  const [live, setLive] = useState('');
   const [listening, setListening] = useState(false);
-  const [recordingMode, setRecordingMode] = useState<'speech' | 'audio' | null>(null);
   const [sending, setSending] = useState(false);
+  const [rerunningId, setRerunningId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const listeningRef = useRef(false);
   const pageAliveRef = useRef(true);
   const sendingRef = useRef(false);
   const dateRef = useRef(date);
-  const committedRef = useRef('');
-  const sessionFinalRef = useRef('');
-  const sessionInterimRef = useRef('');
-  const recRef = useRef<SpeechRec | null>(null);
-  const mediaRef = useRef<{ recorder: MediaRecorder; stream: MediaStream } | null>(null);
+  const mediaRef = useRef<ActiveRecording | null>(null);
   dateRef.current = date;
 
   const load = useCallback(async () => {
@@ -91,7 +60,7 @@ export default function NutritionPage() {
     const [itemRes, settingRes, messageRes] = await Promise.all([
       supabase.from('nutrition_items').select('*').eq('user_id', user.id).eq('date', date).order('created_at'),
       supabase.from('nutrition_settings').select('tracked, targets').eq('user_id', user.id).maybeSingle(),
-      supabase.from('nutrition_messages').select('id, role, content').eq('user_id', user.id).eq('date', date).order('created_at'),
+      supabase.from('nutrition_messages').select('id, role, content, status').eq('user_id', user.id).eq('date', date).order('created_at'),
     ]);
     const loadError = nutritionQueryMessage([itemRes.error, settingRes.error, messageRes.error]);
     if (loadError) {
@@ -101,13 +70,26 @@ export default function NutritionPage() {
     setError('');
     setItems(((itemRes.data ?? []) as Record<string, unknown>[]).map(normalizeItem));
     setSettings(normalizeSettings(settingRes.data));
-    setMessages((messageRes.data ?? []) as ChatMessage[]);
+    setMessages(((messageRes.data ?? []) as { id: string; role: 'user' | 'assistant'; content: string; status?: string }[]).map((row) => ({
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      status: row.status === 'pending' ? 'pending' : 'logged',
+    })));
   }, [user, date]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setNotice(''); }, [date]);
 
-  const publishLive = useCallback(() => {
-    setLive(commitTranscript(committedRef.current, sessionFinalRef.current, sessionInterimRef.current));
+  const applyLogResponse = useCallback((res: Response, body: { error?: string; reply?: string; pending?: boolean }, restore?: string) => {
+    if (!res.ok) {
+      if (restore) setDraft(restore);
+      setNotice('');
+      setError(body.error || 'Could not log that meal.');
+      return;
+    }
+    setError('');
+    setNotice(body.pending ? (body.reply || PENDING_FOOD_MESSAGE) : '');
   }, []);
 
   const submitMessage = useCallback(async (message: string) => {
@@ -120,8 +102,8 @@ export default function NutritionPage() {
     sendingRef.current = true;
     setSending(true);
     setError('');
+    setNotice('');
     setDraft('');
-    setLive('');
     try {
       const res = await fetch('/api/nutrition/log', {
         method: 'POST',
@@ -129,10 +111,7 @@ export default function NutritionPage() {
         body: JSON.stringify({ message: text, date: dateRef.current }),
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setDraft(text);
-        setError(body.error || 'Could not log that meal.');
-      }
+      applyLogResponse(res, body, text);
       await load();
     } catch {
       setDraft(text);
@@ -141,177 +120,165 @@ export default function NutritionPage() {
       sendingRef.current = false;
       setSending(false);
     }
-  }, [load, user]);
+  }, [applyLogResponse, load, user]);
 
-  const finishSpeech = useCallback((submit: boolean) => {
-    committedRef.current = commitTranscript(committedRef.current, sessionFinalRef.current, sessionInterimRef.current);
-    sessionFinalRef.current = '';
-    sessionInterimRef.current = '';
-    const text = committedRef.current.trim();
-    publishLive();
-    if (!submit) return;
-    committedRef.current = '';
-    setLive('');
-    void submitMessage(text);
-  }, [publishLive, submitMessage]);
-
-  const startSpeech = useCallback(() => {
-    const rec = speechRecognition();
-    if (!rec) return false;
-    rec.onresult = (event) => {
-      const pieces = Array.from(event.results).map((result) => ({
-        isFinal: result.isFinal,
-        transcript: result[0]?.transcript ?? '',
-      }));
-      const spoken = readSpeechResults(pieces);
-      sessionFinalRef.current = spoken.finalText;
-      sessionInterimRef.current = spoken.interim;
-      publishLive();
-    };
-    rec.onerror = (event) => {
-      if (event.error === 'aborted' || event.error === 'no-speech') return;
-      if (event.error === 'not-allowed') {
-        listeningRef.current = false;
-        setListening(false);
-        setError('Microphone permission was blocked. Allow the mic for this site, or type the meal.');
-      }
-    };
-    rec.onend = () => {
-      if (!pageAliveRef.current) return;
-      const keepGoing = listeningRef.current;
-      finishSpeech(false);
-      if (!keepGoing) {
-        finishSpeech(true);
-        return;
-      }
-      try {
-        rec.start();
-      } catch {
-        window.setTimeout(() => {
-          if (!listeningRef.current || !pageAliveRef.current) return;
-          try {
-            rec.start();
-          } catch {
-            listeningRef.current = false;
-            setListening(false);
-            finishSpeech(true);
-          }
-        }, 200);
-      }
-    };
+  const rerunMessage = useCallback(async (messageId: string) => {
+    if (sendingRef.current || listeningRef.current || !user) return;
+    sendingRef.current = true;
+    setSending(true);
+    setRerunningId(messageId);
+    setError('');
+    setNotice('');
     try {
-      rec.start();
+      const res = await fetch('/api/nutrition/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId, date: dateRef.current }),
+      });
+      const body = await res.json().catch(() => ({}));
+      applyLogResponse(res, body);
+      await load();
     } catch {
-      return false;
+      setError('Could not reach the food parser.');
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+      setRerunningId(null);
     }
-    recRef.current = rec;
-    return true;
-  }, [finishSpeech, publishLive]);
+  }, [applyLogResponse, load, user]);
 
   const uploadRecording = useCallback(async (blob: Blob) => {
     if (!user) return;
     sendingRef.current = true;
     setSending(true);
     setError('');
+    setNotice('');
     try {
       const form = new FormData();
-      form.set('audio', blob, blob.type.includes('webm') ? 'meal.webm' : 'meal.m4a');
+      form.set('audio', blob, audioFileName(blob.type));
       form.set('date', dateRef.current);
       const res = await fetch('/api/nutrition/transcribe', { method: 'POST', body: form });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (typeof body.transcript === 'string' && body.transcript.trim()) setDraft(body.transcript.trim());
-        setError(body.error || 'Could not transcribe that recording.');
-        return;
-      }
-      setDraft('');
-      setLive('');
-      await load();
+      if (!res.ok && typeof body.transcript === 'string' && body.transcript.trim()) setDraft(body.transcript.trim());
+      applyLogResponse(res, body);
+      if (res.ok) await load();
     } catch {
       setError('Could not upload the recording.');
     } finally {
       sendingRef.current = false;
       setSending(false);
     }
-  }, [load, user]);
+  }, [applyLogResponse, load, user]);
 
-  const startAudioRecording = useCallback(async () => {
+  const openMicrophone = useCallback(async () => {
+    const audio = { echoCancellation: true, noiseSuppression: true };
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio });
+    } catch (err) {
+      const name = err instanceof DOMException ? err.name : '';
+      if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'NotFoundError') throw err;
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+  }, []);
+
+  async function startRecording() {
+    if (sendingRef.current) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setError('This browser cannot record audio. Type what you ate instead.');
-      return false;
+      return;
     }
+    setError('');
+    setNotice('');
+    listeningRef.current = true;
+    setListening(true);
+    let stream: MediaStream;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = recorderMime();
-      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-        const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/mp4' });
-        mediaRef.current = null;
-        if (!pageAliveRef.current) return;
-        if (!blob.size) {
-          setError('No audio was captured. Tap the mic and try again.');
-          return;
-        }
-        void uploadRecording(blob);
-      };
-      recorder.start();
-      mediaRef.current = { recorder, stream };
-      setRecordingMode('audio');
-      return true;
+      stream = await openMicrophone();
     } catch {
+      listeningRef.current = false;
+      setListening(false);
       setError('Microphone permission was blocked. Allow the mic for this site, or type the meal.');
-      return false;
+      return;
     }
-  }, [uploadRecording]);
+    if (!listeningRef.current || !pageAliveRef.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    const mime = preferredRecorderMime({
+      userAgent: navigator.userAgent,
+      isSupported: (type) => {
+        try { return MediaRecorder.isTypeSupported(type); } catch { return false; }
+      },
+    });
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    } catch {
+      try {
+        recorder = new MediaRecorder(stream);
+      } catch {
+        stream.getTracks().forEach((track) => track.stop());
+        listeningRef.current = false;
+        setListening(false);
+        setError('This browser cannot record audio. Type what you ate instead.');
+        return;
+      }
+    }
+    const chunks: Blob[] = [];
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    });
+    const stopped = new Promise<Blob>((resolve) => {
+      recorder.addEventListener('stop', () => {
+        window.setTimeout(() => {
+          resolve(new Blob(chunks, { type: recorder.mimeType || mime || 'audio/mp4' }));
+        }, 150);
+      });
+    });
+    const chosen = recorder.mimeType || mime;
+    const slice = recorderTimesliceMs(chosen);
+    try {
+      if (slice) recorder.start(slice);
+      else recorder.start();
+    } catch {
+      stream.getTracks().forEach((track) => track.stop());
+      listeningRef.current = false;
+      setListening(false);
+      setError('This browser cannot record audio. Type what you ate instead.');
+      return;
+    }
+    mediaRef.current = { recorder, stream, stopped };
+  }
 
   function stopRecording() {
     listeningRef.current = false;
     setListening(false);
-    if (recRef.current) {
-      try { recRef.current.stop(); } catch { finishSpeech(true); }
-      recRef.current = null;
-      return;
-    }
     const media = mediaRef.current;
-    if (media && media.recorder.state !== 'inactive') {
-      media.recorder.stop();
-      return;
+    if (!media) return;
+    mediaRef.current = null;
+    const { recorder, stream, stopped } = media;
+    if (recorder.state !== 'inactive') {
+      try { recorder.stop(); } catch { /* already stopped */ }
     }
-    finishSpeech(true);
-  }
-
-  async function startRecording() {
-    setError('');
-    committedRef.current = draft.trim();
-    sessionFinalRef.current = '';
-    sessionInterimRef.current = '';
-    listeningRef.current = true;
-    setListening(true);
-    publishLive();
-    if (startSpeech()) {
-      setRecordingMode('speech');
-      return;
-    }
-    const started = await startAudioRecording();
-    if (!started) {
-      listeningRef.current = false;
-      setListening(false);
-      setRecordingMode(null);
-    }
+    void stopped.then((blob) => {
+      stream.getTracks().forEach((track) => track.stop());
+      if (!pageAliveRef.current) return;
+      if (!blob.size) {
+        setError('No audio was captured. Tap the mic and try again.');
+        return;
+      }
+      void uploadRecording(blob);
+    });
   }
 
   useEffect(() => () => {
     pageAliveRef.current = false;
     listeningRef.current = false;
-    try { recRef.current?.stop(); } catch { /* already stopped */ }
     const media = mediaRef.current;
-    media?.stream.getTracks().forEach((track) => track.stop());
-    if (media && media.recorder.state !== 'inactive') {
+    mediaRef.current = null;
+    if (!media) return;
+    media.stream.getTracks().forEach((track) => track.stop());
+    if (media.recorder.state !== 'inactive') {
       try { media.recorder.stop(); } catch { /* already stopped */ }
     }
   }, []);
@@ -431,17 +398,40 @@ export default function NutritionPage() {
       </div>
 
       <div className="space-y-2">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={cn(
-              'max-w-[40rem] rounded-2xl px-3 py-2 text-sm',
-              message.role === 'user' ? 'ml-auto bg-blue-600 text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-200',
-            )}
-          >
-            {message.content}
-          </div>
-        ))}
+        {messages.map((message) => {
+          const pending = message.role === 'user' && message.status === 'pending';
+          return (
+            <div
+              key={message.id}
+              className={cn(
+                'max-w-[40rem] rounded-2xl px-3 py-2 text-sm',
+                message.role === 'user'
+                  ? pending
+                    ? 'ml-auto border border-amber-500/50 bg-amber-950 text-amber-50'
+                    : 'ml-auto bg-blue-600 text-white'
+                  : 'bg-zinc-900 border border-zinc-800 text-zinc-200',
+              )}
+            >
+              <p className="whitespace-pre-wrap">{message.content}</p>
+              {message.role === 'user' && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {pending && <span className="text-xs font-medium">Not added to the log yet.</span>}
+                  <button
+                    type="button"
+                    onClick={() => void rerunMessage(message.id)}
+                    disabled={sending || listening}
+                    className={cn(
+                      'h-8 px-2 rounded-lg text-xs font-medium disabled:opacity-40',
+                      pending ? 'bg-amber-200 text-amber-950' : 'bg-white/15 text-white',
+                    )}
+                  >
+                    {rerunningId === message.id ? 'Parsing…' : 'Re-run'}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <form
@@ -452,10 +442,11 @@ export default function NutritionPage() {
           <button
             type="button"
             onClick={toggleMic}
+            disabled={sending}
             aria-pressed={listening}
             aria-label={listening ? 'Stop recording and save' : 'Start recording'}
             className={cn(
-              'h-11 px-3 shrink-0 rounded-xl flex items-center justify-center gap-2 text-sm font-medium',
+              'h-11 px-3 shrink-0 rounded-xl flex items-center justify-center gap-2 text-sm font-medium disabled:opacity-40',
               listening ? 'bg-rose-600 text-white' : 'bg-zinc-800 text-zinc-200',
             )}
           >
@@ -465,10 +456,13 @@ export default function NutritionPage() {
           <div className="flex-1 min-w-0">
             {listening && (
               <div role="status" className="mb-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2">
-                <div className="text-xs font-medium text-rose-200">
-                  {recordingMode === 'audio' ? 'Recording audio' : 'Recording'} — tap Stop to save
-                </div>
-                <p className="text-sm text-white mt-1">{live || 'Listening…'}</p>
+                <div className="text-xs font-medium text-rose-200">Recording — tap Stop to save</div>
+                <p className="text-sm text-white mt-1">Speak the whole meal. It is transcribed after you stop.</p>
+              </div>
+            )}
+            {notice && !error && (
+              <div role="status" className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                {notice}
               </div>
             )}
             {error && (
@@ -476,7 +470,7 @@ export default function NutritionPage() {
                 {error}
               </div>
             )}
-            {sending && !error && (
+            {sending && !error && !notice && (
               <p className="mb-2 text-xs text-zinc-400">Saving what you said…</p>
             )}
             <label htmlFor="food-draft" className="sr-only">What you ate</label>
@@ -484,7 +478,7 @@ export default function NutritionPage() {
               id="food-draft"
               rows={2}
               readOnly={listening}
-              value={listening ? live : draft}
+              value={draft}
               onChange={(event) => { if (!listening) setDraft(event.target.value); }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
