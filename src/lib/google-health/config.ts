@@ -11,6 +11,17 @@ export const SCOPE_SLEEP = GOOGLE_HEALTH_SCOPES[1];
 export const SCOPE_METRICS = GOOGLE_HEALTH_SCOPES[2];
 export const SCOPE_SETTINGS = GOOGLE_HEALTH_SCOPES[3];
 
+/**
+ * Read-only calendar scope. Requested only by the Brain "Connect calendar"
+ * flow. It is intentionally absent from GOOGLE_HEALTH_SCOPES so a Fitbit
+ * reconnect does not ask for calendar, and a calendar connect does not
+ * replace the health refresh token.
+ */
+export const CALENDAR_READONLY_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+
+/** OAuth state prefix for a calendar consent. Health states stay plain hex. */
+export const CALENDAR_OAUTH_PREFIX = 'cal.';
+
 /** First-party Fitbit / Google Health sources. Steps, sleep, and workouts stay here. */
 export const DATA_SOURCE_FAMILY = 'users/me/dataSourceFamilies/google-sources';
 
