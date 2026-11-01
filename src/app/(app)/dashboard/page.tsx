@@ -11,7 +11,8 @@ import { useAuth } from '@/components/auth-provider';
 import { useHousehold } from '@/components/household-provider';
 import { FitnessSnapshot } from '@/components/fitness-snapshot';
 import { NutritionSummary } from '@/components/nutrition-summary';
-import { formatCurrency, getToday, getDayOfChallenge, shiftDate, APP_TIME_ZONE, cn, toNumber } from '@/lib/utils';
+import { UpdatedAgo } from '@/components/updated-ago';
+import { formatCurrency, getToday, getDayOfChallenge, shiftDate, APP_TIME_ZONE, cn, toNumber, latestTimestamp } from '@/lib/utils';
 import { fetchUsdCadRate, toCad } from '@/lib/fx';
 import { coerceFitnessDaily, coerceSession, metricsOf } from '@/lib/fitness-metrics';
 import type {
@@ -69,6 +70,7 @@ interface FitnessData {
   prevEntries: FitnessDaily[];
   goals: FitnessGoals | null;
   sessions: TrainingSession[];
+  syncAt: string | null;
 }
 
 interface FinanceData {
@@ -79,6 +81,10 @@ interface FinanceData {
   netWorthHistory: { month: string; value: number }[];
   accounts: { account: Account; balance: number | null }[];
   monthlyFlow: { month: string; income: number; spending: number }[];
+  monthUpdatedAt: string | null;
+  netWorthUpdatedAt: string | null;
+  accountsUpdatedAt: string | null;
+  flowUpdatedAt: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,11 +196,12 @@ function FitnessSection({
       const start30 = shiftDate(today, -29);
       const start60 = shiftDate(today, -59);
 
-      const [recentRes, prevRes, goalsRes, sessionRes] = await Promise.all([
+      const [recentRes, prevRes, goalsRes, sessionRes, syncRes] = await Promise.all([
         supabase.from('fitness_daily').select('*').eq('user_id', viewUserId).gte('date', start30).lte('date', today).order('date'),
         supabase.from('fitness_daily').select('*').eq('user_id', viewUserId).gte('date', start60).lt('date', start30).order('date'),
         supabase.from('fitness_goals').select('*').eq('user_id', viewUserId).maybeSingle(),
         supabase.from('training_sessions').select('*').eq('user_id', viewUserId).gte('date', shiftDate(today, -1)).lte('date', today).order('date', { ascending: false }),
+        supabase.from('fitness_sync_state').select('last_synced_at').eq('user_id', viewUserId).maybeSingle(),
       ]);
 
       setFitnessData({
@@ -202,6 +209,7 @@ function FitnessSection({
         prevEntries: ((prevRes.data ?? []) as FitnessDaily[]).map(coerceFitnessDaily),
         goals: goalsRes.data,
         sessions: ((sessionRes.data ?? []) as TrainingSession[]).map(coerceSession),
+        syncAt: syncRes.data?.last_synced_at ?? null,
       });
       setLoading(false);
     }
@@ -218,9 +226,20 @@ function FitnessSection({
 
   if (!fitnessData) return null;
 
-  const { entries, goals, sessions } = fitnessData;
+  const { entries, goals, sessions, syncAt } = fitnessData;
   const todayKey = getToday();
   const yesterdayKey = shiftDate(todayKey, -1);
+  const fitnessUpdatedAt = latestTimestamp([
+    syncAt,
+    ...entries.map((entry) => entry.created_at),
+    ...sessions.map((session) => session.created_at),
+  ]);
+  const snapshotUpdatedAt = latestTimestamp([
+    syncAt,
+    entries.find((entry) => entry.date === todayKey)?.created_at,
+    entries.find((entry) => entry.date === yesterdayKey)?.created_at,
+    ...sessions.map((session) => session.created_at),
+  ]);
 
   // Challenge progress
   const challengeDay = goals?.challenge_start_date ? getDayOfChallenge(goals.challenge_start_date) : null;
@@ -313,15 +332,19 @@ function FitnessSection({
         yesterdayMetrics={metricsOf(entries.find((entry) => entry.date === yesterdayKey))}
         todayMetrics={metricsOf(entries.find((entry) => entry.date === todayKey))}
         workouts={sessions}
+        updatedAt={snapshotUpdatedAt}
       />
 
       <NutritionSummary userId={viewUserId} date={todayKey} compact />
 
       {entries.length === 0 ? (
-        <p className="text-zinc-500 text-sm">
-          No fitness data in the last 30 days.{' '}
-          <Link href="/fitness" className="text-blue-400 hover:underline">Log now</Link>
-        </p>
+        <div>
+          <p className="text-zinc-500 text-sm">
+            No fitness data in the last 30 days.{' '}
+            <Link href="/fitness" className="text-blue-400 hover:underline">Log now</Link>
+          </p>
+          <UpdatedAgo at={fitnessUpdatedAt} className="mt-2" />
+        </div>
       ) : (
         <>
           {/* Challenge progress */}
@@ -339,6 +362,7 @@ function FitnessSection({
                   style={{ width: `${Math.min(challengePct, 100)}%` }}
                 />
               </div>
+              <UpdatedAgo at={latestTimestamp([goals.updated_at, fitnessUpdatedAt])} className="mt-2" />
             </Card>
           )}
 
@@ -402,6 +426,7 @@ function FitnessSection({
                 goodDir="down"
               />
             </div>
+            <UpdatedAgo at={fitnessUpdatedAt} className="mt-3" />
           </Card>
 
           {/* Scorecard */}
@@ -416,28 +441,29 @@ function FitnessSection({
                 <ScoreRow label="Cal Burned" hit={hitBurned} total={days} />
                 <ScoreRow label="Workout" hit={hitWorkout} total={days} />
               </div>
+              <UpdatedAgo at={fitnessUpdatedAt} className="mt-3" />
             </Card>
           )}
 
           {/* Sparklines */}
           <div className="grid grid-cols-1 gap-3">
             {weightChartData.length > 1 && (
-              <SparkCard label="Weight (lbs)" goal={goals?.goal_weight}>
+              <SparkCard label="Weight (lbs)" goal={goals?.goal_weight} updatedAt={fitnessUpdatedAt}>
                 <Sparkline data={weightChartData} dataKey="weight" color="#60a5fa" goal={goals?.goal_weight} />
               </SparkCard>
             )}
             {stepsChartData.some((d) => d.steps !== null) && (
-              <SparkCard label="Steps" goal={goals?.steps_min}>
+              <SparkCard label="Steps" goal={goals?.steps_min} updatedAt={fitnessUpdatedAt}>
                 <Sparkline data={stepsChartData} dataKey="steps" color="#34d399" goal={goals?.steps_min} />
               </SparkCard>
             )}
             {heartChartData.length > 1 && (
-              <SparkCard label="Resting heart rate">
+              <SparkCard label="Resting heart rate" updatedAt={fitnessUpdatedAt}>
                 <Sparkline data={heartChartData} dataKey="heart" color="#fb7185" />
               </SparkCard>
             )}
             {calsChartData.some((d) => d.calories !== null) && (
-              <SparkCard label="Calories Consumed" goal={goals?.calories_max}>
+              <SparkCard label="Calories Consumed" goal={goals?.calories_max} updatedAt={fitnessUpdatedAt}>
                 <Sparkline data={calsChartData} dataKey="calories" color="#f87171" goal={goals?.calories_max} />
               </SparkCard>
             )}
@@ -486,14 +512,15 @@ function ScoreRow({ label, hit, total }: { label: string; hit: number | null; to
   );
 }
 
-function SparkCard({ label, goal, children }: { label: string; goal?: number; children: React.ReactNode }) {
+function SparkCard({ label, goal, updatedAt, children }: { label: string; goal?: number; updatedAt?: string | null; children: React.ReactNode }) {
   return (
-    <div className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 pt-3 pb-1">
+    <div className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 pt-3 pb-2">
       <div className="flex justify-between items-center mb-1">
         <span className="text-xs text-zinc-500">{label}</span>
         {goal !== undefined && <span className="text-xs text-zinc-600">Goal: {goal.toLocaleString()}</span>}
       </div>
       {children}
+      <UpdatedAgo at={updatedAt} />
     </div>
   );
 }
@@ -522,7 +549,10 @@ function FinanceSection({ householdId }: { householdId: string }) {
       ]);
       const personalBudgetIds = new Set((bCatRes.data ?? []).filter((c) => (c.scope ?? 'personal') === 'personal').map((c) => c.id));
       const personalIncomeIds = new Set((iCatRes.data ?? []).filter((c) => (c.scope ?? 'personal') === 'personal').map((c) => c.id));
-      const sumPersonal = (rows: { amount: number; category_id: string }[] | null, ids: Set<string>) => (rows ?? []).filter((r) => ids.has(r.category_id)).reduce((s, e) => s + Number(e.amount), 0);
+      type AmountRow = { amount: number; category_id: string; created_at?: string | null };
+      const personalRows = (rows: AmountRow[] | null, ids: Set<string>) => (rows ?? []).filter((row) => ids.has(row.category_id));
+      const sumPersonal = (rows: AmountRow[] | null, ids: Set<string>) => personalRows(rows, ids).reduce((sum, row) => sum + Number(row.amount), 0);
+      const newestPersonal = (rows: AmountRow[] | null, ids: Set<string>) => latestTimestamp(personalRows(rows, ids).map((row) => row.created_at));
 
       const [
         budgetRes,
@@ -534,10 +564,10 @@ function FinanceSection({ householdId }: { householdId: string }) {
         nwEntriesRes,
         nwItemsRes,
       ] = await Promise.all([
-        supabase.from('budget_daily').select('amount, category_id').eq('household_id', householdId).gte('date', monthStart).lte('date', monthEnd),
-        supabase.from('income_daily').select('amount, category_id').eq('household_id', householdId).gte('date', monthStart).lte('date', monthEnd),
-        supabase.from('budget_daily').select('amount, category_id').eq('household_id', householdId).gte('date', prevMonthStart).lte('date', prevMonthEnd),
-        supabase.from('income_daily').select('amount, category_id').eq('household_id', householdId).gte('date', prevMonthStart).lte('date', prevMonthEnd),
+        supabase.from('budget_daily').select('amount, category_id, created_at').eq('household_id', householdId).gte('date', monthStart).lte('date', monthEnd),
+        supabase.from('income_daily').select('amount, category_id, created_at').eq('household_id', householdId).gte('date', monthStart).lte('date', monthEnd),
+        supabase.from('budget_daily').select('amount, category_id, created_at').eq('household_id', householdId).gte('date', prevMonthStart).lte('date', prevMonthEnd),
+        supabase.from('income_daily').select('amount, category_id, created_at').eq('household_id', householdId).gte('date', prevMonthStart).lte('date', prevMonthEnd),
         supabase.from('accounts').select('*').eq('household_id', householdId).order('sort_order'),
         supabase.from('account_balances').select('*').eq('household_id', householdId).order('date', { ascending: false }),
         supabase.from('net_worth_entries').select('*, net_worth_items(type)').eq('household_id', householdId).order('month', { ascending: false }),
@@ -546,6 +576,10 @@ function FinanceSection({ householdId }: { householdId: string }) {
 
       const moneyOut = sumPersonal(budgetRes.data, personalBudgetIds);
       const moneyIn = sumPersonal(incomeRes.data, personalIncomeIds);
+      const monthUpdatedAt = latestTimestamp([
+        newestPersonal(budgetRes.data, personalBudgetIds),
+        newestPersonal(incomeRes.data, personalIncomeIds),
+      ]);
 
       // Net worth computation helper
       type NWEntry = NetWorthEntry & { net_worth_items: { type: string } | null };
@@ -577,29 +611,36 @@ function FinanceSection({ householdId }: { householdId: string }) {
       const fxState = await fetchUsdCadRate();
       const allBalances: AccountBalance[] = balancesRes.data ?? [];
       const accts: Account[] = accountsRes.data ?? [];
-      const latestBalances: { account: Account; balance: number | null }[] = accts.map((acct) => {
+      const latestBalances: { account: Account; balance: number | null; updatedAt: string | null }[] = accts.map((acct) => {
         const bal = allBalances.find((b) => b.account_id === acct.id);
         return {
           account: acct,
           balance: bal ? toCad(Number(bal.balance), acct.currency ?? 'CAD', fxState.rate) : null,
+          updatedAt: bal?.created_at ?? null,
         };
       });
 
       // Last 3 months income vs spending (using budget_daily date ranges)
-      const monthlyFlow = await Promise.all(
+      const monthlyParts = await Promise.all(
         [2, 1, 0].map(async (i) => {
           const { start, end } = monthRange(i);
           const [bRes, iRes] = await Promise.all([
-            supabase.from('budget_daily').select('amount, category_id').eq('household_id', householdId).gte('date', start).lte('date', end),
-            supabase.from('income_daily').select('amount, category_id').eq('household_id', householdId).gte('date', start).lte('date', end),
+            supabase.from('budget_daily').select('amount, category_id, created_at').eq('household_id', householdId).gte('date', start).lte('date', end),
+            supabase.from('income_daily').select('amount, category_id, created_at').eq('household_id', householdId).gte('date', start).lte('date', end),
           ]);
           return {
             month: monthLabel(i),
             income: sumPersonal(iRes.data, personalIncomeIds),
             spending: sumPersonal(bRes.data, personalBudgetIds),
+            updatedAt: latestTimestamp([
+              newestPersonal(bRes.data, personalBudgetIds),
+              newestPersonal(iRes.data, personalIncomeIds),
+            ]),
           };
         }),
       );
+      const monthlyFlow = monthlyParts.map(({ month, income, spending }) => ({ month, income, spending }));
+      const flowUpdatedAt = latestTimestamp(monthlyParts.map((part) => part.updatedAt));
 
       setData({
         moneyIn,
@@ -609,6 +650,10 @@ function FinanceSection({ householdId }: { householdId: string }) {
         netWorthHistory,
         accounts: latestBalances,
         monthlyFlow,
+        monthUpdatedAt,
+        netWorthUpdatedAt: latestTimestamp(allNwEntries.map((entry) => entry.created_at)),
+        accountsUpdatedAt: latestTimestamp(latestBalances.map((row) => row.updatedAt)),
+        flowUpdatedAt,
       });
       setLoading(false);
     }
@@ -657,6 +702,7 @@ function FinanceSection({ householdId }: { householdId: string }) {
             color={surplus >= 0 ? 'text-emerald-400' : 'text-red-400'}
           />
         </div>
+        <UpdatedAgo at={data.monthUpdatedAt} className="mt-3" />
       </Card>
 
       {/* Net Worth */}
@@ -698,6 +744,7 @@ function FinanceSection({ householdId }: { householdId: string }) {
             <Link href="/finances" className="text-blue-400 hover:underline">Add one</Link>
           </p>
         )}
+        <UpdatedAgo at={data.netWorthUpdatedAt} className="mt-3" />
       </Card>
 
       {/* Account Balances */}
@@ -724,6 +771,7 @@ function FinanceSection({ householdId }: { householdId: string }) {
               </div>
             ))}
           </div>
+          <UpdatedAgo at={data.accountsUpdatedAt} className="mt-3" />
         </Card>
       ) : (
         <p className="text-zinc-500 text-sm">
@@ -748,6 +796,7 @@ function FinanceSection({ householdId }: { householdId: string }) {
               <Bar dataKey="spending" name="Spending" fill="#f87171" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          <UpdatedAgo at={data.flowUpdatedAt} className="mt-2" />
         </Card>
       )}
     </Section>

@@ -117,3 +117,42 @@ export function getStatusColor(value: number | null, min?: number, max?: number)
 export function cn(...classes: (string | boolean | undefined | null)[]): string {
   return classes.filter(Boolean).join(' ');
 }
+
+/** Newest parseable timestamp, for "updated … ago" stamps. */
+export function latestTimestamp(values: Array<string | null | undefined>): string | null {
+  let best: string | null = null;
+  let bestMs = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (!value) continue;
+    const ms = new Date(value).getTime();
+    if (Number.isFinite(ms) && ms >= bestMs) {
+      best = value;
+      bestMs = ms;
+    }
+  }
+  return best;
+}
+
+/** "Updated 5 min ago". Null when there is no timestamp. */
+export function formatUpdatedAgo(value: string | null | undefined, now = Date.now()): string | null {
+  if (!value) return null;
+  const then = new Date(value).getTime();
+  if (!Number.isFinite(then)) return null;
+  const elapsed = Math.max(0, now - then);
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (elapsed < 45_000) return 'Updated just now';
+  if (elapsed < hour) {
+    const minutes = Math.max(1, Math.round(elapsed / minute));
+    return `Updated ${minutes} min ago`;
+  }
+  if (elapsed < day) {
+    const hours = Math.max(1, Math.round(elapsed / hour));
+    return `Updated ${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+  }
+  const days = Math.max(1, Math.round(elapsed / day));
+  if (days < 30) return `Updated ${days} ${days === 1 ? 'day' : 'days'} ago`;
+  const months = Math.max(1, Math.round(days / 30));
+  return `Updated ${months} ${months === 1 ? 'month' : 'months'} ago`;
+}

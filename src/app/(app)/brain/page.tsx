@@ -5,11 +5,13 @@
 //   → To-Do (unified: todos + decisions + commitments + people) → Key insights
 //   → Context questions.
 // Reads/writes brain_items + brain_briefings directly via the browser Supabase
-// client (RLS: authenticated). No API route, no service-role key.
+// client. RLS allows the household owner and members (v19). No API route,
+// no service-role key.
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/auth-provider';
+import { useHousehold } from '@/components/household-provider';
 
 /* ---------------------------------- types --------------------------------- */
 
@@ -100,6 +102,7 @@ function fmtDate(d: string | null) {
 export default function BrainPage() {
   const supabase = useMemo(() => createClient(), []);
   const { user } = useAuth();
+  const { householdId } = useHousehold();
 
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [items, setItems] = useState<Item[]>([]);
@@ -162,7 +165,7 @@ export default function BrainPage() {
 
   const addTodo = useCallback(
     async (f: { title: string; due_by?: string; out_to_who?: string }) => {
-      const { error } = await supabase.from('brain_items').insert({
+      const row: Record<string, unknown> = {
         item_key: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         kind: 'todo',
         title: f.title,
@@ -174,10 +177,20 @@ export default function BrainPage() {
         sort_order: 999,
         active: true,
         briefing_date: todayISO(),
-      });
-      if (!error) load();
+      };
+      if (householdId) row.household_id = householdId;
+      if (user?.id) row.user_id = user.id;
+      let { error } = await supabase.from('brain_items').insert(row);
+      // v19 adds these columns. Until that migration is applied, retry the old shape.
+      if (error && /schema cache|could not find the ['"](?:household_id|user_id)['"] column/i.test(error.message)) {
+        delete row.household_id;
+        delete row.user_id;
+        ({ error } = await supabase.from('brain_items').insert(row));
+      }
+      if (error) setSaveState('error');
+      else load();
     },
-    [supabase, load]
+    [supabase, load, householdId, user]
   );
 
   const byKind = useCallback(

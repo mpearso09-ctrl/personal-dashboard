@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { UpdatedAgo } from '@/components/updated-ago';
 import { workoutSummary, type DayMetrics } from '@/lib/fitness-metrics';
 import type { TrainingSession } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -37,6 +38,7 @@ export function FitnessSnapshot({
   workouts,
   onSelectDate,
   tone = 'card',
+  updatedAt = null,
 }: {
   yesterday: string;
   today: string;
@@ -45,6 +47,7 @@ export function FitnessSnapshot({
   workouts: TrainingSession[];
   onSelectDate?: (date: string) => void;
   tone?: 'card' | 'inset';
+  updatedAt?: string | null;
 }) {
   const ordered = [...workouts].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   const dayHeading = (date: string, label: string) => {
@@ -65,7 +68,10 @@ export function FitnessSnapshot({
   return (
     <div className={cn('rounded-xl border border-zinc-800 p-4', tone === 'inset' ? 'bg-zinc-950' : 'bg-zinc-900')}>
       <div className="flex items-center justify-between gap-3 mb-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Yesterday and today</h2>
+        <div>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Yesterday and today</h2>
+          <UpdatedAgo at={updatedAt} />
+        </div>
         <Link href="/training" className="text-xs text-blue-400 hover:text-blue-300">Training</Link>
       </div>
       <table className="w-full text-sm">
