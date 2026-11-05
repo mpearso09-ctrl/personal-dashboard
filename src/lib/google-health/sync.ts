@@ -7,6 +7,9 @@ import {
   configuredTimezone,
   hasScope,
   isValidTimeZone,
+  FITBIT_REPORT_EMAIL_UNREADABLE,
+  fitbitEmailErrorPatch,
+  fitbitReportDecision,
   reportFromAddress,
   reportRecipient,
   SCOPE_ACTIVITY,
@@ -84,7 +87,11 @@ export type SyncResult = {
 };
 
 export type SyncOptions = {
-  /** Send the daily report, and a failure note if the sync cannot finish. Defaults to true. */
+  /**
+   * Ask for the daily report and a failure note if the sync cannot finish.
+   * Defaults to true. Only the account whose auth email is listed in
+   * FITBIT_REPORT_EMAIL is actually mailed. Hourly runs pass false.
+   */
   email?: boolean;
 };
 
@@ -259,7 +266,7 @@ export async function syncGoogleHealthUser(userId: string, options: SyncOptions 
     connected: true,
     last_synced_at: new Date().toISOString(),
     last_sync_error: note || null,
-    ...(email ? { last_email_error: email.sent ? null : email.reason ?? 'Email was not sent' } : {}),
+    ...fitbitEmailErrorPatch(email),
   });
 
   return {
@@ -277,6 +284,8 @@ export async function syncGoogleHealthUser(userId: string, options: SyncOptions 
 
 export async function syncAllConnected(options: SyncOptions = {}): Promise<SyncResult[]> {
   const admin = createServiceClient();
+  // Every connected account is synced. Mail, when requested, goes out only
+  // for accounts whose auth email is listed in FITBIT_REPORT_EMAIL.
   const { data, error } = await admin.from('google_health_tokens').select('user_id');
   if (error) throw new Error(error.message);
   const results: SyncResult[] = [];
@@ -506,6 +515,9 @@ async function sendReport(
   userId: string,
   input: { yesterday: string; today: string; skipped: string[]; warning: string | null },
 ): Promise<{ sent: boolean; reason?: string }> {
+  const allowed = await reportRecipientStatus(admin, userId);
+  if (!allowed.send) return { sent: false, reason: allowed.reason };
+
   const priorDates = Array.from({ length: 7 }, (_, index) => addCalendarDays(input.yesterday, -7 + index));
   const { data: rows, error } = await admin
     .from('fitness_daily')
@@ -580,14 +592,34 @@ async function sendEmail(
   message: string,
   html: string | null,
 ): Promise<{ sent: boolean; reason?: string }> {
+  const allowed = await reportRecipientStatus(admin, userId);
+  if (!allowed.send) return { sent: false, reason: allowed.reason };
+
   const body = html ?? `<div style="font-family:sans-serif;background:#09090b;color:#fafafa;padding:24px;">
     <h1 style="font-size:20px;">Fitbit sync did not finish</h1>
     <p>${message.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>
     <p>Open the dashboard, go to Fitness, and choose Connect Fitbit.</p>
   </div>`;
   const result = await deliver(body, 'Fitbit sync needs a reconnect');
-  await writeState(admin, userId, { last_email_error: result.sent ? null : result.reason ?? 'Email was not sent' });
+  await writeState(admin, userId, fitbitEmailErrorPatch(result));
   return result;
+}
+
+/**
+ * Daily mail is for the account whose Supabase auth email is in
+ * FITBIT_REPORT_EMAIL. Every other connected account still syncs.
+ */
+async function reportRecipientStatus(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<{ send: true } | { send: false; reason: string }> {
+  try {
+    const { data, error } = await admin.auth.admin.getUserById(userId);
+    if (error || !data.user) return { send: false, reason: FITBIT_REPORT_EMAIL_UNREADABLE };
+    return fitbitReportDecision(true, data.user.email);
+  } catch {
+    return { send: false, reason: FITBIT_REPORT_EMAIL_UNREADABLE };
+  }
 }
 
 async function deliver(html: string, subject: string): Promise<{ sent: boolean; reason?: string }> {
