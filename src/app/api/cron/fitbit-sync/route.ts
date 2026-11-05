@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
+import { fitbitEmailRequested } from '@/lib/google-health/config';
 import { syncAllConnected } from '@/lib/google-health/sync';
 
 export const dynamic = 'force-dynamic';
@@ -16,11 +17,13 @@ function authorized(request: Request): boolean {
   return timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
-/** The daily Vercel cron omits this and sends the report. Hourly runs pass email=0. */
+/**
+ * The daily Vercel cron omits this and asks for the report. Hourly runs pass
+ * email=0 and stay silent. The report is sent only for the connected account
+ * whose auth email is listed in FITBIT_REPORT_EMAIL; every account still syncs.
+ */
 function emailRequested(request: Request): boolean {
-  const flag = new URL(request.url).searchParams.get('email');
-  if (flag == null || flag.trim() === '') return true;
-  return !['0', 'false', 'no', 'off'].includes(flag.trim().toLowerCase());
+  return fitbitEmailRequested(new URL(request.url).searchParams.get('email'));
 }
 
 async function handle(request: Request) {

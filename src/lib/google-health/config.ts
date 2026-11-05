@@ -55,11 +55,86 @@ export function googleHealthRedirectUri(): string {
   return configured || DEFAULT_REDIRECT_URI;
 }
 
+/**
+ * Daily cron omits the flag and sends a report. Hourly runs pass email=0
+ * (also false, no, or off) and only sync.
+ */
+export function fitbitEmailRequested(flag: string | null): boolean {
+  if (flag == null || flag.trim() === '') return true;
+  return !['0', 'false', 'no', 'off'].includes(flag.trim().toLowerCase());
+}
+
 export function reportRecipient(): string[] {
   return (process.env.FITBIT_REPORT_EMAIL ?? '')
     .split(',')
     .map((email) => email.trim())
     .filter(Boolean);
+}
+
+/** Daily report was not sent because this connected account is not the recipient. */
+export const FITBIT_REPORT_OTHER_ACCOUNT = 'not the report recipient';
+
+/** Daily report was not sent because the account email could not be read. */
+export const FITBIT_REPORT_EMAIL_UNREADABLE = 'could not read the account email';
+
+const SILENT_FITBIT_EMAIL_REASONS = new Set<string>([
+  'skipped',
+  FITBIT_REPORT_OTHER_ACCOUNT,
+  FITBIT_REPORT_EMAIL_UNREADABLE,
+]);
+
+/**
+ * True when this Supabase auth email is one of the FITBIT_REPORT_EMAIL
+ * addresses. Comparison is case-insensitive. A "Name <email>" recipient
+ * matches the address inside the brackets. Other household accounts are not
+ * a match, so connecting another Fitbit cannot send a second morning email.
+ */
+export function isFitbitReportAccount(
+  userEmail: string | null | undefined,
+  recipients: readonly string[] = reportRecipient(),
+): boolean {
+  const normalized = normalizeReportEmail(userEmail);
+  if (!normalized) return false;
+  return recipients.some((recipient) => normalizeReportEmail(recipient) === normalized);
+}
+
+export type FitbitReportDecision =
+  | { send: true }
+  | { send: false; reason: 'skipped' | typeof FITBIT_REPORT_OTHER_ACCOUNT };
+
+/**
+ * Whether this sync should send mail. `emailEnabled` is false for hourly
+ * runs (`email=0`); those never send, even when the account matches.
+ * A matching account is one whose auth email is listed in FITBIT_REPORT_EMAIL.
+ */
+export function fitbitReportDecision(
+  emailEnabled: boolean,
+  userEmail: string | null | undefined,
+  recipients?: readonly string[],
+): FitbitReportDecision {
+  if (!emailEnabled) return { send: false, reason: 'skipped' };
+  if (!isFitbitReportAccount(userEmail, recipients ?? reportRecipient())) {
+    return { send: false, reason: FITBIT_REPORT_OTHER_ACCOUNT };
+  }
+  return { send: true };
+}
+
+/**
+ * Persist last_email_error only after a real delivery attempt. Skipping a
+ * household account, or failing to read its email, is not an email error.
+ */
+export function fitbitEmailErrorPatch(
+  email: { sent: boolean; reason?: string } | null,
+): { last_email_error?: string | null } {
+  if (!email) return {};
+  if (!email.sent && email.reason && SILENT_FITBIT_EMAIL_REASONS.has(email.reason)) return {};
+  return { last_email_error: email.sent ? null : email.reason ?? 'Email was not sent' };
+}
+
+function normalizeReportEmail(value: string | null | undefined): string {
+  const trimmed = (value ?? '').trim().toLowerCase();
+  const wrapped = trimmed.match(/<([^>]+)>/);
+  return (wrapped?.[1] ?? trimmed).trim();
 }
 
 export function reportFromAddress(): string {
