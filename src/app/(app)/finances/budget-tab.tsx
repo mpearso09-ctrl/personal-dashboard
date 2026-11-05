@@ -45,6 +45,7 @@ export function BudgetTab({
   // ── Edit state ──────────────────────────────────────────────────────────────────────
   const [editDraft, setEditDraft] = useState<BudgetCategory[]>([]);
   const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [newCatName, setNewCatName] = useState('');
   const [newCatAmount, setNewCatAmount] = useState('');
@@ -175,15 +176,22 @@ export function BudgetTab({
   };
 
   // ── Edit mode ──────────────────────────────────────────────────────────────────────
-  const openEdit = () => { setEditDraft(categories.map((c) => ({ ...c }))); setViewMode('edit'); };
+  const openEdit = () => { setEditError(null); setEditDraft(categories.map((c) => ({ ...c }))); setViewMode('edit'); };
 
   const saveEdit = async () => {
     setEditSaving(true);
+    setEditError(null);
+    const failed: string[] = [];
     for (let i = 0; i < editDraft.length; i++) {
       const c = editDraft[i];
-      await supabase.from('budget_categories').update({ name: c.name, monthly_amount: c.monthly_amount, frequency: c.frequency ?? 'monthly', scope: c.scope ?? 'personal', sort_order: i }).eq('id', c.id);
+      const { error } = await supabase.from('budget_categories').update({ name: c.name, monthly_amount: c.monthly_amount, frequency: c.frequency ?? 'monthly', scope: c.scope ?? 'personal', sort_order: i }).eq('id', c.id);
+      if (error) failed.push(c.name);
     }
     setEditSaving(false);
+    if (failed.length) {
+      setEditError(`Not saved: ${failed.join(', ')}. Nothing was lost on screen. Try Save again.`);
+      return;
+    }
     await loadCategories();
     setViewMode('view');
   };
@@ -196,14 +204,20 @@ export function BudgetTab({
   const addCategory = async () => {
     const amt = parseFloat(newCatAmount);
     if (!newCatName.trim() || isNaN(amt) || amt <= 0) return;
-    await supabase.from('budget_categories').insert({ user_id: userId, household_id: householdId, name: newCatName.trim(), monthly_amount: amt, frequency: newCatFreq, sort_order: editDraft.length });
+    const { error } = await supabase.from('budget_categories').insert({ user_id: userId, household_id: householdId, name: newCatName.trim(), monthly_amount: amt, frequency: newCatFreq, sort_order: editDraft.length });
+    if (error) {
+      setEditError(error.code === '23505' ? `"${newCatName.trim()}" already exists.` : `Couldn't add "${newCatName.trim()}". Try again.`);
+      return;
+    }
+    setEditError(null);
     setNewCatName(''); setNewCatAmount('');
     await refreshEditDraft();
   };
 
   const deleteCategory = async (catId: string) => {
-    await supabase.from('budget_categories').delete().eq('id', catId);
+    const { error } = await supabase.from('budget_categories').delete().eq('id', catId);
     setDeleteConfirm(null);
+    if (error) { setEditError("Couldn't delete that item. Try again."); return; }
     await refreshEditDraft();
   };
 
@@ -247,6 +261,10 @@ export function BudgetTab({
             </button>
           </div>
         </div>
+
+        {editError && (
+          <div className="bg-red-500/10 border border-red-500/30 text-red-300 px-4 py-2 rounded-lg text-sm">{editError}</div>
+        )}
 
         <Card>
           {editDraft.length === 0 ? (
