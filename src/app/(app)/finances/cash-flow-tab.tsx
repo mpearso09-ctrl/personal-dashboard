@@ -187,10 +187,10 @@ export function CashFlowTab({
 
   const subtotals = useMemo(() => {
     const byScope: Record<AccountScope, number> = { business: 0, personal: 0 };
-    const byType: Record<AccountType, number> = { chequing: 0, savings: 0, investments: 0 };
+    const byType: Record<AccountType, number> = { chequing: 0, savings: 0, investments: 0, allowance: 0 };
     const byScopeType: Record<AccountScope, Record<AccountType, number>> = {
-      business: { chequing: 0, savings: 0, investments: 0 },
-      personal: { chequing: 0, savings: 0, investments: 0 },
+      business: { chequing: 0, savings: 0, investments: 0, allowance: 0 },
+      personal: { chequing: 0, savings: 0, investments: 0, allowance: 0 },
     };
     for (const acc of accounts) {
       const v = balCad(acc, todayBalances);
@@ -211,13 +211,13 @@ export function CashFlowTab({
   const trendData = useMemo(() => {
     const byDate: Record<
       string,
-      { total: number; business: number; personal: number; chequing: number; savings: number; investments: number; perAccount: Record<string, number> }
+      { total: number; business: number; personal: number; chequing: number; savings: number; investments: number; allowance: number; perAccount: Record<string, number> }
     > = {};
     for (const b of trendRows) {
       const meta = b.accounts;
       const cad = toCad(Number(b.balance), meta?.currency ?? 'CAD', fx.rate);
       if (!byDate[b.date]) {
-        byDate[b.date] = { total: 0, business: 0, personal: 0, chequing: 0, savings: 0, investments: 0, perAccount: {} };
+        byDate[b.date] = { total: 0, business: 0, personal: 0, chequing: 0, savings: 0, investments: 0, allowance: 0, perAccount: {} };
       }
       const d = byDate[b.date];
       d.total += cad;
@@ -569,7 +569,7 @@ export function CashFlowTab({
                     {formatCurrencyDecimal(subtotals.byScope[cashView])}
                   </div>
                 </div>
-                {(['chequing', 'savings', 'investments'] as const).map((t) => (
+                {(['chequing', 'savings', 'investments', 'allowance'] as const).map((t) => (
                   <div key={t}>
                     <div className="text-xs text-zinc-500 mb-0.5">{ACCOUNT_TYPE_LABELS[t]}</div>
                     <div className="text-xl font-bold" style={{ color: TYPE_COLORS[t] }}>
@@ -580,7 +580,7 @@ export function CashFlowTab({
               </div>
             )}
             {cashView === 'type' && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <div>
                   <div className="text-xs text-zinc-500 mb-0.5">Chequing</div>
                   <div className="text-xl font-bold" style={{ color: TYPE_COLORS.chequing }}>
@@ -597,6 +597,12 @@ export function CashFlowTab({
                   <div className="text-xs text-zinc-500 mb-0.5">Investments</div>
                   <div className="text-xl font-bold" style={{ color: TYPE_COLORS.investments }}>
                     {formatCurrencyDecimal(subtotals.byType.investments)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 mb-0.5">Allowance</div>
+                  <div className="text-xl font-bold" style={{ color: TYPE_COLORS.allowance }}>
+                    {formatCurrencyDecimal(subtotals.byType.allowance)}
                   </div>
                 </div>
                 <div>

@@ -391,6 +391,7 @@ export const TYPE_COLORS: Record<AccountType, string> = {
   chequing: '#3b82f6',
   savings: '#10b981',
   investments: '#8b5cf6',
+  allowance: '#f472b6',
 };
 
 export type TrendRow = AccountBalance & {

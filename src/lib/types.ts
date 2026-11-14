@@ -109,7 +109,7 @@ export interface BudgetDailyEntry {
 // ---- Cash Flow (household-scoped, dynamic accounts) ----
 
 export type AccountCurrency = 'CAD' | 'USD';
-export type AccountType = 'chequing' | 'savings' | 'investments';
+export type AccountType = 'chequing' | 'savings' | 'investments' | 'allowance';
 export type AccountScope = 'personal' | 'business';
 
 export interface Account {
@@ -128,6 +128,7 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   chequing: 'Chequing',
   savings: 'Savings',
   investments: 'Investments',
+  allowance: 'Allowance',
 };
 
 export const ACCOUNT_SCOPE_LABELS: Record<AccountScope, string> = {

@@ -75,7 +75,25 @@ const TYPE_LABELS: Record<AccountType, string> = {
   chequing: 'Chequing',
   savings: 'Savings',
   investments: 'Investments',
+  allowance: 'Allowance',
 };
+
+// Account Balances groups, in the order Mike reads them. Business scope wins over type.
+type BalanceGroup = 'savings' | 'investments' | 'personal' | 'allowance' | 'business';
+const BALANCE_GROUPS: { key: BalanceGroup; label: string; hint: string; color: string }[] = [
+  { key: 'savings', label: 'Cash Savings', hint: 'TD CAD, TD USD (converted to CAD) and Short Savings', color: '#10b981' },
+  { key: 'investments', label: 'Investments', hint: 'iTrade and Kraken', color: '#8b5cf6' },
+  { key: 'personal', label: 'Personal Chequing', hint: 'Main Chequing — household transactions', color: '#3b82f6' },
+  { key: 'allowance', label: 'Allowances', hint: "Mike's and Melissa's individual allowance accounts", color: '#f472b6' },
+  { key: 'business', label: 'Business', hint: 'MMP and Frameworks chequing — kept separate', color: '#f59e0b' },
+];
+function balanceGroupOf(a: { scope: AccountScope; account_type: AccountType }): BalanceGroup {
+  if (a.scope === 'business') return 'business';
+  if (a.account_type === 'investments') return 'investments';
+  if (a.account_type === 'allowance') return 'allowance';
+  if (a.account_type === 'savings') return 'savings';
+  return 'personal';
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -265,7 +283,7 @@ export default function FinanceOverview({ householdId }: { householdId: string }
   // CAD subtotals by scope and account type
   const cashSubtotals = useMemo(() => {
     const byScope: Record<AccountScope, number> = { business: 0, personal: 0 };
-    const byType: Record<AccountType, number> = { chequing: 0, savings: 0, investments: 0 };
+    const byType: Record<AccountType, number> = { chequing: 0, savings: 0, investments: 0, allowance: 0 };
     for (const acc of accounts) {
       const v = rawToCad(acc.id, latestBalanceByAccount[acc.id]?.balance ?? 0);
       byScope[acc.scope ?? 'personal'] += v;
@@ -303,6 +321,15 @@ export default function FinanceOverview({ householdId }: { householdId: string }
       };
     });
   }, [accounts, latestBalanceByAccount, yesterdayBalanceByAccount, rawToCad]);
+
+  // Account Balances grouped Savings / Investments / Personal / Allowances / Business
+  const balanceGroups = useMemo(() => {
+    return BALANCE_GROUPS.map((g) => {
+      const rows = accountBalancesList.filter((a) => balanceGroupOf(a) === g.key);
+      return { ...g, rows, subtotal: rows.reduce((s, r) => s + r.balance, 0) };
+    }).filter((g) => g.rows.length > 0);
+  }, [accountBalancesList]);
+  const [balanceHelp, setBalanceHelp] = useState(false);
 
   // Category color map
   const catColorMap = useMemo(() => {
@@ -536,46 +563,46 @@ export default function FinanceOverview({ householdId }: { householdId: string }
               <div className="flex items-center gap-2">
                 <Wallet size={18} className="text-blue-400" />
                 Account Balances (CAD)
+                <button
+                  onClick={() => setBalanceHelp((v) => !v)}
+                  aria-label="How these balances are grouped"
+                  className="h-5 w-5 rounded-full border border-zinc-600 text-[11px] font-bold text-zinc-400 hover:text-white hover:border-zinc-400"
+                >
+                  ?
+                </button>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="flex bg-zinc-800 rounded-lg p-0.5">
-                  {CASH_VIEWS.map((v) => (
-                    <button
-                      key={v.value}
-                      onClick={() => setCashView(v.value)}
-                      className={cn(
-                        'px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
-                        cashView === v.value
-                          ? 'bg-blue-600 text-white'
-                          : 'text-zinc-400 hover:text-white'
-                      )}
-                    >
-                      {v.label}
-                    </button>
-                  ))}
-                </div>
-                <span className="text-lg font-bold text-white">{formatCurrency(scopeFilter ? cashSubtotals.byScope[scopeFilter] : totalCash)}</span>
-              </div>
+              <span className="text-lg font-bold text-white tabular-nums">{formatCurrency(totalCash)}</span>
             </CardTitle>
           </CardHeader>
-          {cashView === 'type' ? (
-            <div className="space-y-4">
-              {(['chequing', 'savings', 'investments'] as const)
-                .map((t) => ({ label: TYPE_LABELS[t], rows: accountBalancesList.filter((a) => a.account_type === t), subtotal: cashSubtotals.byType[t] }))
-                .filter((g) => g.rows.length > 0)
-                .map((g) => (
-                  <div key={g.label}>
-                    <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800/60 rounded-lg mb-1">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">{g.label}</span>
-                      <span className="text-sm font-bold text-white tabular-nums">{formatCurrency(g.subtotal)}</span>
-                    </div>
-                    <AccountRows rows={g.rows} />
-                  </div>
-                ))}
+          {balanceHelp && (
+            <div className="mb-4 rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-300 space-y-1">
+              <p className="font-semibold text-white">How this works</p>
+              {BALANCE_GROUPS.map((g) => (
+                <p key={g.key}><span className="font-medium" style={{ color: g.color }}>{g.label}:</span> {g.hint}</p>
+              ))}
+              <p>USD balances are converted to CAD at today&apos;s rate. Balances come from the daily entries on the Cash Flow tab.</p>
+              <p>To move an account into a different group, change its type or Personal/Business setting under Cash Flow → Manage Accounts.</p>
             </div>
-          ) : (
-            <AccountRows rows={accountBalancesList.filter((a) => !scopeFilter || a.scope === scopeFilter)} />
           )}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-4">
+            {balanceGroups.map((g) => (
+              <div key={g.key} className="rounded-lg bg-zinc-800/60 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: g.color }}>{g.label}</div>
+                <div className="text-lg font-bold text-white tabular-nums">{formatCurrency(g.subtotal)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-4">
+            {balanceGroups.map((g) => (
+              <div key={g.key}>
+                <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800/60 rounded-lg mb-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: g.color }}>{g.label}</span>
+                  <span className="text-sm font-bold text-white tabular-nums">{formatCurrency(g.subtotal)}</span>
+                </div>
+                <AccountRows rows={g.rows} />
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
