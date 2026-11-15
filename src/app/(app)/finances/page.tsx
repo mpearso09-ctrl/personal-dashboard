@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createClient } from '@/lib/supabase-browser';
+import { syncCashInvestments } from '@/lib/net-worth-sync';
 import { useAuth } from '@/components/auth-provider';
 import { useHousehold } from '@/components/household-provider';
 import { cn } from '@/lib/utils';
@@ -38,6 +40,11 @@ export default function FinancesPage() {
   const { user, loading: authLoading } = useAuth();
   const { householdId, canEditFinances } = useHousehold();
   const [activeTab, setActiveTab] = useState<Tab>('Overview');
+
+  // Keep Net Worth "Cash + Investments" current from the daily balances every time Finances opens.
+  useEffect(() => {
+    if (user && householdId && canEditFinances) syncCashInvestments(createClient(), householdId, user.id);
+  }, [user, householdId, canEditFinances]);
 
   if (authLoading) {
     return (

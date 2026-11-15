@@ -11,6 +11,7 @@ import { DEFAULT_NET_WORTH_ASSETS, DEFAULT_NET_WORTH_LIABILITIES } from '@/lib/t
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { Plus, Check, X, Trash2, Settings } from 'lucide-react';
 import { InlineEdit, InputField, SaveButton, getMonthStart } from './shared';
+import { syncCashInvestments, CASH_INV_ITEM_NAME, CASH_INV_AUTO_FROM } from '@/lib/net-worth-sync';
 
 export function NetWorthTab({
   userId,
@@ -36,6 +37,9 @@ export function NetWorthTab({
   const [newItemName, setNewItemName] = useState('');
   const [newItemType, setNewItemType] = useState<'asset' | 'liability'>('asset');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  // Cash + Investments fills itself from the daily balances from CASH_INV_AUTO_FROM on.
+  const isAuto = (item: NetWorthItem) => item.name === CASH_INV_ITEM_NAME && month >= CASH_INV_AUTO_FROM;
 
   const assets = items.filter((i) => i.type === 'asset');
   const liabilities = items.filter((i) => i.type === 'liability');
@@ -78,10 +82,11 @@ export function NetWorthTab({
   }, [householdId]);
 
   const loadAll = useCallback(async () => {
+    if (canEdit) await syncCashInvestments(supabase, householdId, userId);
     await loadItems();
     await loadEntriesForMonth(month);
     await loadAllEntries();
-  }, [loadItems, loadEntriesForMonth, month, loadAllEntries]);
+  }, [loadItems, loadEntriesForMonth, month, loadAllEntries, canEdit, householdId, userId]);
 
   useEffect(() => {
     loadAll();
@@ -94,6 +99,7 @@ export function NetWorthTab({
   const handleSave = async () => {
     setSaving(true);
     for (const item of items) {
+      if (isAuto(item)) continue;
       const value = values[item.id];
       if (value !== undefined) {
         await supabase.from('net_worth_entries').upsert(
@@ -340,8 +346,25 @@ export function NetWorthTab({
       {items.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Monthly Snapshot</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              Monthly Snapshot
+              <button
+                onClick={() => setShowHelp((v) => !v)}
+                aria-label="How the monthly snapshot works"
+                className="h-5 w-5 rounded-full border border-zinc-600 text-[11px] font-bold text-zinc-400 hover:text-white hover:border-zinc-400"
+              >
+                ?
+              </button>
+            </CardTitle>
           </CardHeader>
+          {showHelp && (
+            <div className="mb-4 rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-300 space-y-1">
+              <p className="font-semibold text-white">How this works</p>
+              <p><span className="font-medium text-emerald-400">Cash + Investments (auto):</span> filled in for you every month from the daily balances on Cash Flow. It uses each personal account&apos;s last balance in the month (savings, investments, Main Chequing, allowances), with USD converted to CAD at today&apos;s rate. Business accounts are left out because they have their own line. The current month updates every time you open Finances.</p>
+              <p><span className="font-medium text-white">Everything else:</span> enter it yourself once a month. Pick the month, type the values and press Save.</p>
+              <p>Months before September 2026 keep the Cash + Investments figures you entered by hand.</p>
+            </div>
+          )}
           <div className="mb-4">
             <InputField
               label="Month (YYYY-MM)"
@@ -363,11 +386,11 @@ export function NetWorthTab({
                 {assets.map((item) => (
                   <InputField
                     key={item.id}
-                    label={item.name}
+                    label={isAuto(item) ? `${item.name} (auto)` : item.name}
                     value={values[item.id] ?? ''}
                     step="0.01"
-                    placeholder="0.00"
-                    disabled={!canEdit}
+                    placeholder={isAuto(item) ? 'No balances yet' : '0.00'}
+                    disabled={!canEdit || isAuto(item)}
                     onChange={(v) =>
                       setValues((vals) => ({ ...vals, [item.id]: parseFloat(v) || 0 }))
                     }
